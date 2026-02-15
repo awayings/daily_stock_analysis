@@ -148,7 +148,15 @@ class Config:
     markdown_to_image_max_chars: int = 15000  # 超过此长度不转换，避免超大图片
 
     # === 数据库配置 ===
+    database_type: str = "sqlite"  # sqlite, mysql 或 doris
     database_path: str = "./data/stock_analysis.db"
+    
+    # Doris数据库配置
+    doris_host: Optional[str] = None
+    doris_port: int = 9030
+    doris_user: Optional[str] = None
+    doris_password: Optional[str] = None
+    doris_database: str = "stock_analysis"
 
     # 是否保存分析上下文快照（用于历史回溯）
     save_context_snapshot: bool = True
@@ -403,7 +411,13 @@ class Config:
                 if c.strip()
             ],
             markdown_to_image_max_chars=int(os.getenv('MARKDOWN_TO_IMAGE_MAX_CHARS', '15000')),
+            database_type=os.getenv('DATABASE_TYPE', 'sqlite'),
             database_path=os.getenv('DATABASE_PATH', './data/stock_analysis.db'),
+            doris_host=os.getenv('DORIS_HOST'),
+            doris_port=int(os.getenv('DORIS_PORT', '9030')),
+            doris_user=os.getenv('DORIS_USER'),
+            doris_password=os.getenv('DORIS_PASSWORD'),
+            doris_database=os.getenv('DORIS_DATABASE', 'stock_analysis'),
             save_context_snapshot=os.getenv('SAVE_CONTEXT_SNAPSHOT', 'true').lower() == 'true',
             backtest_enabled=os.getenv('BACKTEST_ENABLED', 'true').lower() == 'true',
             backtest_eval_window_days=int(os.getenv('BACKTEST_EVAL_WINDOW_DAYS', '10')),
@@ -596,13 +610,20 @@ class Config:
     
     def get_db_url(self) -> str:
         """
-        获取 SQLAlchemy 数据库连接 URL
+        获取数据库连接 URL
         
-        自动创建数据库目录（如果不存在）
+        支持 SQLite、MySQL 和 Doris
         """
-        db_path = Path(self.database_path)
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        return f"sqlite:///{db_path.absolute()}"
+        if self.database_type == 'doris':
+            if not self.doris_host or not self.doris_user or not self.doris_password:
+                raise ValueError("Doris配置不完整，请检查 DORIS_HOST, DORIS_USER, DORIS_PASSWORD")
+            return f"mysql+pymysql://{self.doris_user}:{self.doris_password}@{self.doris_host}:{self.doris_port}/{self.doris_database}"
+        elif self.database_type == 'sqlite':
+            db_path = Path(self.database_path)
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            return f"sqlite:///{db_path.absolute()}"
+        else:
+            raise ValueError(f"不支持的数据库类型: {self.database_type}")
 
 
 # === 便捷的配置访问函数 ===

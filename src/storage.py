@@ -5,7 +5,7 @@ A股自选股智能分析系统 - 存储层
 ===================================
 
 职责：
-1. 管理 SQLite 数据库连接（单例模式）
+1. 管理 SQLite/Doris 数据库连接（单例模式）
 2. 定义 ORM 数据模型
 3. 提供数据存取接口
 4. 实现智能更新逻辑（断点续传）
@@ -66,14 +66,14 @@ class StockDaily(Base):
     """
     __tablename__ = 'stock_daily'
     
-    # 主键
+    # 主键（SQLAlchemy 要求，Doris 模式下可忽略）
     id = Column(Integer, primary_key=True, autoincrement=True)
     
     # 股票代码（如 600519, 000001）
-    code = Column(String(10), nullable=False, index=True)
+    code = Column(String(10), nullable=False)
     
     # 交易日期
-    date = Column(Date, nullable=False, index=True)
+    date = Column(Date, nullable=False)
     
     # OHLC 数据
     open = Column(Float)
@@ -136,30 +136,31 @@ class NewsIntel(Base):
     """
     __tablename__ = 'news_intel'
 
+    # 主键
     id = Column(Integer, primary_key=True, autoincrement=True)
 
     # 关联用户查询操作
-    query_id = Column(String(64), index=True)
+    query_id = Column(String(64))
 
     # 股票信息
-    code = Column(String(10), nullable=False, index=True)
+    code = Column(String(10), nullable=False)
     name = Column(String(50))
 
     # 搜索上下文
-    dimension = Column(String(32), index=True)  # latest_news / risk_check / earnings / market_analysis / industry
+    dimension = Column(String(32))  # latest_news / risk_check / earnings / market_analysis / industry
     query = Column(String(255))
-    provider = Column(String(32), index=True)
+    provider = Column(String(32))
 
     # 新闻内容
     title = Column(String(300), nullable=False)
     snippet = Column(Text)
     url = Column(String(1000), nullable=False)
     source = Column(String(100))
-    published_date = Column(DateTime, index=True)
+    published_date = Column(DateTime)
 
     # 入库时间
-    fetched_at = Column(DateTime, default=datetime.now, index=True)
-    query_source = Column(String(32), index=True)  # bot/web/cli/system
+    fetched_at = Column(DateTime, default=datetime.now)
+    query_source = Column(String(32))  # bot/web/cli/system
     requester_platform = Column(String(20))
     requester_user_id = Column(String(64))
     requester_user_name = Column(String(64))
@@ -184,15 +185,16 @@ class AnalysisHistory(Base):
     """
     __tablename__ = 'analysis_history'
 
+    # 主键
     id = Column(Integer, primary_key=True, autoincrement=True)
 
     # 关联查询链路
-    query_id = Column(String(64), index=True)
+    query_id = Column(String(64))
 
     # 股票信息
-    code = Column(String(10), nullable=False, index=True)
+    code = Column(String(10), nullable=False)
     name = Column(String(50))
-    report_type = Column(String(16), index=True)
+    report_type = Column(String(16))
 
     # 核心结论
     sentiment_score = Column(Integer)
@@ -211,7 +213,7 @@ class AnalysisHistory(Base):
     stop_loss = Column(Float)
     take_profit = Column(Float)
 
-    created_at = Column(DateTime, default=datetime.now, index=True)
+    created_at = Column(DateTime, default=datetime.now)
 
     __table_args__ = (
         Index('ix_analysis_code_time', 'code', 'created_at'),
@@ -245,18 +247,18 @@ class BacktestResult(Base):
 
     __tablename__ = 'backtest_results'
 
+    # 主键
     id = Column(Integer, primary_key=True, autoincrement=True)
 
     analysis_history_id = Column(
         Integer,
         ForeignKey('analysis_history.id'),
         nullable=False,
-        index=True,
     )
 
     # 冗余字段，便于按股票筛选
-    code = Column(String(10), nullable=False, index=True)
-    analysis_date = Column(Date, index=True)
+    code = Column(String(10), nullable=False)
+    analysis_date = Column(Date)
 
     # 回测参数
     eval_window_days = Column(Integer, nullable=False, default=10)
@@ -264,7 +266,7 @@ class BacktestResult(Base):
 
     # 状态
     eval_status = Column(String(16), nullable=False, default='pending')
-    evaluated_at = Column(DateTime, default=datetime.now, index=True)
+    evaluated_at = Column(DateTime, default=datetime.now)
 
     # 建议快照（避免未来分析字段变化导致回测不可解释）
     operation_advice = Column(String(20))
@@ -315,12 +317,12 @@ class BacktestSummary(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    scope = Column(String(16), nullable=False, index=True)  # overall/stock
-    code = Column(String(16), index=True)
+    scope = Column(String(16), nullable=False)  # overall/stock
+    code = Column(String(16))
 
     eval_window_days = Column(Integer, nullable=False, default=10)
     engine_version = Column(String(16), nullable=False, default='v1')
-    computed_at = Column(DateTime, default=datetime.now, index=True)
+    computed_at = Column(DateTime, default=datetime.now)
 
     # 计数
     total_evaluations = Column(Integer, default=0)
@@ -371,10 +373,12 @@ class DatabaseManager:
     1. 管理数据库连接池
     2. 提供 Session 上下文管理
     3. 封装数据存取操作
+    4. 支持 SQLite 和 Doris
     """
     
     _instance: Optional['DatabaseManager'] = None
     _initialized: bool = False
+    _is_doris: bool = False
     
     def __new__(cls, *args, **kwargs):
         """单例模式实现"""
@@ -396,6 +400,7 @@ class DatabaseManager:
         if db_url is None:
             config = get_config()
             db_url = config.get_db_url()
+            self._is_doris = config.database_type == 'doris'
         
         # 创建数据库引擎
         self._engine = create_engine(
@@ -411,14 +416,22 @@ class DatabaseManager:
             autoflush=False,
         )
         
-        # 创建所有表
-        Base.metadata.create_all(self._engine)
+        # 创建所有表（Doris 模式下跳过，因为需要手动创建表）
+        if not self._is_doris:
+            Base.metadata.create_all(self._engine)
+        else:
+            logger.info("Doris 模式：跳过自动创建表，需要手动创建表")
 
         self._initialized = True
-        logger.info(f"数据库初始化完成: {db_url}")
+        logger.info(f"数据库初始化完成: {db_url} (类型: {'Doris' if self._is_doris else 'SQLite'})")
 
         # 注册退出钩子，确保程序退出时关闭数据库连接
         atexit.register(DatabaseManager._cleanup_engine, self._engine)
+    
+    @property
+    def is_doris(self) -> bool:
+        """是否使用 Doris 数据库"""
+        return self._is_doris
     
     @classmethod
     def get_instance(cls) -> 'DatabaseManager':
@@ -547,6 +560,8 @@ class DatabaseManager:
 
         关联策略：
         - query_context 记录用户查询信息（平台、用户、会话、原始指令等）
+        - Doris 使用先删除后插入的方式实现 UPSERT（避免 strict mode 错误）
+        - SQLite 使用先查询后更新/插入
         """
         if not response or not response.results:
             return 0
@@ -557,93 +572,145 @@ class DatabaseManager:
 
         with self.get_session() as session:
             try:
-                for item in response.results:
-                    title = (item.title or '').strip()
-                    url = (item.url or '').strip()
-                    source = (item.source or '').strip()
-                    snippet = (item.snippet or '').strip()
-                    published_date = self._parse_published_date(item.published_date)
+                if self.is_doris:
+                    # Doris 使用先删除后插入的方式实现 UPSERT（避免 strict mode 错误）
+                    for item in response.results:
+                        title = (item.title or '').strip()
+                        url = (item.url or '').strip()
+                        source = (item.source or '').strip()
+                        snippet = (item.snippet or '').strip()
+                        published_date = self._parse_published_date(item.published_date)
 
-                    if not title and not url:
-                        continue
+                        if not title and not url:
+                            continue
 
-                    url_key = url or self._build_fallback_url_key(
-                        code=code,
-                        title=title,
-                        source=source,
-                        published_date=published_date
-                    )
+                        url_key = url or self._build_fallback_url_key(
+                            code=code,
+                            title=title,
+                            source=source,
+                            published_date=published_date
+                        )
 
-                    # 优先按 URL 或兜底键去重
-                    existing = session.execute(
-                        select(NewsIntel).where(NewsIntel.url == url_key)
-                    ).scalar_one_or_none()
+                        # 先删除已存在的记录
+                        session.execute(
+                            NewsIntel.__table__.delete().where(
+                                NewsIntel.url == url_key
+                            )
+                        )
 
-                    if existing:
-                        existing.name = name or existing.name
-                        existing.dimension = dimension or existing.dimension
-                        existing.query = query or existing.query
-                        existing.provider = response.provider or existing.provider
-                        existing.snippet = snippet or existing.snippet
-                        existing.source = source or existing.source
-                        existing.published_date = published_date or existing.published_date
-                        existing.fetched_at = datetime.now()
+                        # 插入新记录
+                        record = NewsIntel(
+                            code=code,
+                            name=name,
+                            dimension=dimension,
+                            query=query,
+                            provider=response.provider,
+                            title=title,
+                            snippet=snippet,
+                            url=url_key,
+                            source=source,
+                            published_date=published_date,
+                            fetched_at=datetime.now(),
+                            query_id=current_query_id or None,
+                            query_source=query_ctx.get("query_source"),
+                            requester_platform=query_ctx.get("requester_platform"),
+                            requester_user_id=query_ctx.get("requester_user_id"),
+                            requester_user_name=query_ctx.get("requester_user_name"),
+                            requester_chat_id=query_ctx.get("requester_chat_id"),
+                            requester_message_id=query_ctx.get("requester_message_id"),
+                            requester_query=query_ctx.get("requester_query"),
+                        )
+                        session.add(record)
+                        saved_count += 1
+                else:
+                    # SQLite 使用先查询后更新/插入
+                    for item in response.results:
+                        title = (item.title or '').strip()
+                        url = (item.url or '').strip()
+                        source = (item.source or '').strip()
+                        snippet = (item.snippet or '').strip()
+                        published_date = self._parse_published_date(item.published_date)
 
-                        if query_context:
-                            # Keep the first query_id to avoid overwriting historical links.
-                            if not existing.query_id and current_query_id:
-                                existing.query_id = current_query_id
-                            existing.query_source = (
-                                query_context.get("query_source") or existing.query_source
-                            )
-                            existing.requester_platform = (
-                                query_context.get("requester_platform") or existing.requester_platform
-                            )
-                            existing.requester_user_id = (
-                                query_context.get("requester_user_id") or existing.requester_user_id
-                            )
-                            existing.requester_user_name = (
-                                query_context.get("requester_user_name") or existing.requester_user_name
-                            )
-                            existing.requester_chat_id = (
-                                query_context.get("requester_chat_id") or existing.requester_chat_id
-                            )
-                            existing.requester_message_id = (
-                                query_context.get("requester_message_id") or existing.requester_message_id
-                            )
-                            existing.requester_query = (
-                                query_context.get("requester_query") or existing.requester_query
-                            )
-                    else:
-                        try:
-                            with session.begin_nested():
-                                record = NewsIntel(
-                                    code=code,
-                                    name=name,
-                                    dimension=dimension,
-                                    query=query,
-                                    provider=response.provider,
-                                    title=title,
-                                    snippet=snippet,
-                                    url=url_key,
-                                    source=source,
-                                    published_date=published_date,
-                                    fetched_at=datetime.now(),
-                                    query_id=current_query_id or None,
-                                    query_source=query_ctx.get("query_source"),
-                                    requester_platform=query_ctx.get("requester_platform"),
-                                    requester_user_id=query_ctx.get("requester_user_id"),
-                                    requester_user_name=query_ctx.get("requester_user_name"),
-                                    requester_chat_id=query_ctx.get("requester_chat_id"),
-                                    requester_message_id=query_ctx.get("requester_message_id"),
-                                    requester_query=query_ctx.get("requester_query"),
+                        if not title and not url:
+                            continue
+
+                        url_key = url or self._build_fallback_url_key(
+                            code=code,
+                            title=title,
+                            source=source,
+                            published_date=published_date
+                        )
+
+                        # 优先按 URL 或兜底键去重
+                        existing = session.execute(
+                            select(NewsIntel).where(NewsIntel.url == url_key)
+                        ).scalar_one_or_none()
+
+                        if existing:
+                            existing.name = name or existing.name
+                            existing.dimension = dimension or existing.dimension
+                            existing.query = query or existing.query
+                            existing.provider = response.provider or existing.provider
+                            existing.snippet = snippet or existing.snippet
+                            existing.source = source or existing.source
+                            existing.published_date = published_date or existing.published_date
+                            existing.fetched_at = datetime.now()
+
+                            if query_context:
+                                # Keep the first query_id to avoid overwriting historical links.
+                                if not existing.query_id and current_query_id:
+                                    existing.query_id = current_query_id
+                                existing.query_source = (
+                                    query_context.get("query_source") or existing.query_source
                                 )
-                                session.add(record)
-                                session.flush()
-                            saved_count += 1
-                        except IntegrityError:
-                            # 单条 URL 唯一约束冲突（如并发插入），仅跳过本条，保留本批其余成功项
-                            logger.debug("新闻情报重复（已跳过）: %s %s", code, url_key)
+                                existing.requester_platform = (
+                                    query_context.get("requester_platform") or existing.requester_platform
+                                )
+                                existing.requester_user_id = (
+                                    query_context.get("requester_user_id") or existing.requester_user_id
+                                )
+                                existing.requester_user_name = (
+                                    query_context.get("requester_user_name") or existing.requester_user_name
+                                )
+                                existing.requester_chat_id = (
+                                    query_context.get("requester_chat_id") or existing.requester_chat_id
+                                )
+                                existing.requester_message_id = (
+                                    query_context.get("requester_message_id") or existing.requester_message_id
+                                )
+                                existing.requester_query = (
+                                    query_context.get("requester_query") or existing.requester_query
+                                )
+                        else:
+                            try:
+                                with session.begin_nested():
+                                    record = NewsIntel(
+                                        code=code,
+                                        name=name,
+                                        dimension=dimension,
+                                        query=query,
+                                        provider=response.provider,
+                                        title=title,
+                                        snippet=snippet,
+                                        url=url_key,
+                                        source=source,
+                                        published_date=published_date,
+                                        fetched_at=datetime.now(),
+                                        query_id=current_query_id or None,
+                                        query_source=query_ctx.get("query_source"),
+                                        requester_platform=query_ctx.get("requester_platform"),
+                                        requester_user_id=query_ctx.get("requester_user_id"),
+                                        requester_user_name=query_ctx.get("requester_user_name"),
+                                        requester_chat_id=query_ctx.get("requester_chat_id"),
+                                        requester_message_id=query_ctx.get("requester_message_id"),
+                                        requester_query=query_ctx.get("requester_query"),
+                                    )
+                                    session.add(record)
+                                    session.flush()
+                                saved_count += 1
+                            except IntegrityError:
+                                # 单条 URL 唯一约束冲突（如并发插入），仅跳过本条，保留本批其余成功项
+                                logger.debug("新闻情报重复（已跳过）: %s %s", code, url_key)
 
                 session.commit()
                 logger.info(f"保存新闻情报成功: {code}, 新增 {saved_count} 条")
@@ -885,7 +952,8 @@ class DatabaseManager:
         
         策略：
         - 使用 UPSERT 逻辑（存在则更新，不存在则插入）
-        - 跳过已存在的数据，避免重复
+        - Doris 使用先删除后插入的方式实现 UPSERT（避免 strict mode 错误）
+        - SQLite 使用先查询后更新/插入
         
         Args:
             df: 包含日线数据的 DataFrame
@@ -903,43 +971,29 @@ class DatabaseManager:
         
         with self.get_session() as session:
             try:
-                for _, row in df.iterrows():
-                    # 解析日期
-                    row_date = row.get('date')
-                    if isinstance(row_date, str):
-                        row_date = datetime.strptime(row_date, '%Y-%m-%d').date()
-                    elif isinstance(row_date, datetime):
-                        row_date = row_date.date()
-                    elif isinstance(row_date, pd.Timestamp):
-                        row_date = row_date.date()
-                    
-                    # 检查是否已存在
-                    existing = session.execute(
-                        select(StockDaily).where(
-                            and_(
-                                StockDaily.code == code,
-                                StockDaily.date == row_date
+                if self.is_doris:
+                    # Doris 使用先删除后插入的方式实现 UPSERT（避免 strict mode 错误）
+                    for _, row in df.iterrows():
+                        # 解析日期
+                        row_date = row.get('date')
+                        if isinstance(row_date, str):
+                            row_date = datetime.strptime(row_date, '%Y-%m-%d').date()
+                        elif isinstance(row_date, datetime):
+                            row_date = row_date.date()
+                        elif isinstance(row_date, pd.Timestamp):
+                            row_date = row_date.date()
+                        
+                        # 先删除已存在的记录
+                        session.execute(
+                            StockDaily.__table__.delete().where(
+                                and_(
+                                    StockDaily.code == code,
+                                    StockDaily.date == row_date
+                                )
                             )
                         )
-                    ).scalar_one_or_none()
-                    
-                    if existing:
-                        # 更新现有记录
-                        existing.open = row.get('open')
-                        existing.high = row.get('high')
-                        existing.low = row.get('low')
-                        existing.close = row.get('close')
-                        existing.volume = row.get('volume')
-                        existing.amount = row.get('amount')
-                        existing.pct_chg = row.get('pct_chg')
-                        existing.ma5 = row.get('ma5')
-                        existing.ma10 = row.get('ma10')
-                        existing.ma20 = row.get('ma20')
-                        existing.volume_ratio = row.get('volume_ratio')
-                        existing.data_source = data_source
-                        existing.updated_at = datetime.now()
-                    else:
-                        # 创建新记录
+                        
+                        # 插入新记录
                         record = StockDaily(
                             code=code,
                             date=row_date,
@@ -958,9 +1012,66 @@ class DatabaseManager:
                         )
                         session.add(record)
                         saved_count += 1
+                else:
+                    # SQLite 使用先查询后更新/插入
+                    for _, row in df.iterrows():
+                        # 解析日期
+                        row_date = row.get('date')
+                        if isinstance(row_date, str):
+                            row_date = datetime.strptime(row_date, '%Y-%m-%d').date()
+                        elif isinstance(row_date, datetime):
+                            row_date = row_date.date()
+                        elif isinstance(row_date, pd.Timestamp):
+                            row_date = row_date.date()
+                        
+                        # 检查是否已存在
+                        existing = session.execute(
+                            select(StockDaily).where(
+                                and_(
+                                    StockDaily.code == code,
+                                    StockDaily.date == row_date
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        
+                        if existing:
+                            # 更新现有记录
+                            existing.open = row.get('open')
+                            existing.high = row.get('high')
+                            existing.low = row.get('low')
+                            existing.close = row.get('close')
+                            existing.volume = row.get('volume')
+                            existing.amount = row.get('amount')
+                            existing.pct_chg = row.get('pct_chg')
+                            existing.ma5 = row.get('ma5')
+                            existing.ma10 = row.get('ma10')
+                            existing.ma20 = row.get('ma20')
+                            existing.volume_ratio = row.get('volume_ratio')
+                            existing.data_source = data_source
+                            existing.updated_at = datetime.now()
+                        else:
+                            # 创建新记录
+                            record = StockDaily(
+                                code=code,
+                                date=row_date,
+                                open=row.get('open'),
+                                high=row.get('high'),
+                                low=row.get('low'),
+                                close=row.get('close'),
+                                volume=row.get('volume'),
+                                amount=row.get('amount'),
+                                pct_chg=row.get('pct_chg'),
+                                ma5=row.get('ma5'),
+                                ma10=row.get('ma10'),
+                                ma20=row.get('ma20'),
+                                volume_ratio=row.get('volume_ratio'),
+                                data_source=data_source,
+                            )
+                            session.add(record)
+                            saved_count += 1
                 
                 session.commit()
-                logger.info(f"保存 {code} 数据成功，新增 {saved_count} 条")
+                logger.info(f"保存 {code} 数据成功，处理 {saved_count} 条")
                 
             except Exception as e:
                 session.rollback()
