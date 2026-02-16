@@ -613,11 +613,14 @@ class Config:
         获取数据库连接 URL
         
         支持 SQLite、MySQL 和 Doris
+        
+        Doris 使用 doris-alchemy 框架，URL格式：
+        doris+pymysql://user:password@host:port/database?charset=utf8mb4
         """
         if self.database_type == 'doris':
             if not self.doris_host or not self.doris_user or not self.doris_password:
                 raise ValueError("Doris配置不完整，请检查 DORIS_HOST, DORIS_USER, DORIS_PASSWORD")
-            return f"mysql+pymysql://{self.doris_user}:{self.doris_password}@{self.doris_host}:{self.doris_port}/{self.doris_database}"
+            return f"doris+pymysql://{self.doris_user}:{self.doris_password}@{self.doris_host}:{self.doris_port}/{self.doris_database}?charset=utf8mb4"
         elif self.database_type == 'sqlite':
             db_path = Path(self.database_path)
             db_path.parent.mkdir(parents=True, exist_ok=True)

@@ -42,6 +42,7 @@ dingtalk-stream >= 0.24.3    # 钉钉 Stream SDK
 # 数据库
 # SQLite 是 Python 内置，无需额外安装
 pymysql>=1.1.0              # MySQL/Doris 连接驱动
+doris-alchemy>=0.2.12       # Apache Doris SQLAlchemy 方言（支持 UNIQUE KEY 模型）
 
 # Discord 机器人
 discord.py>=2.0.0              # Discord 机器人开发库

@@ -6,7 +6,7 @@ A股自选股智能分析系统 - 存储层
 
 职责：
 1. 管理 SQLite/Doris 数据库连接（单例模式）
-2. 定义 ORM 数据模型
+2. 定义 ORM 数据模型（支持 Doris UNIQUE KEY 模型）
 3. 提供数据存取接口
 4. 实现智能更新逻辑（断点续传）
 """
@@ -29,6 +29,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Integer,
+    BigInteger,
     ForeignKey,
     Index,
     UniqueConstraint,
@@ -36,6 +37,7 @@ from sqlalchemy import (
     select,
     and_,
     desc,
+    text,
 )
 from sqlalchemy.orm import (
     declarative_base,
@@ -48,62 +50,74 @@ from src.config import get_config
 
 logger = logging.getLogger(__name__)
 
-# SQLAlchemy ORM 基类
-Base = declarative_base()
+SQLITE_BASE = declarative_base()
 
 if TYPE_CHECKING:
     from src.search_service import SearchResponse
 
 
-# === 数据模型定义 ===
+def _get_doris_base():
+    """延迟导入 DorisBase，避免在非 Doris 环境下导入失败"""
+    try:
+        from doris_alchemy import DorisBase as _DorisBase
+        return _DorisBase
+    except ImportError:
+        logger.warning("doris-alchemy 未安装，将使用标准 SQLAlchemy Base")
+        return SQLITE_BASE
 
-class StockDaily(Base):
+
+def _get_doris_distributed():
+    """延迟导入 Doris 分布式函数"""
+    try:
+        from doris_alchemy import HASH
+        return HASH
+    except ImportError:
+        return None
+
+
+class StockDaily(SQLITE_BASE):
     """
     股票日线数据模型
     
     存储每日行情数据和计算的技术指标
     支持多股票、多日期的唯一约束
+    
+    Doris UNIQUE KEY 模型：
+    - 主键: code, date
+    - 分布: HASH(code)
     """
     __tablename__ = 'stock_daily'
     
-    # 主键（SQLAlchemy 要求，Doris 模式下可忽略）
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    __table_args__ = (
+        UniqueConstraint('code', 'date', name='uix_code_date'),
+        Index('ix_code_date', 'code', 'date'),
+        {'extend_existing': True},
+    )
     
-    # 股票代码（如 600519, 000001）
-    code = Column(String(10), nullable=False)
+    code = Column(String(10), nullable=False, primary_key=True)  # 股票代码（如 600519, 000001）
+    date = Column(Date, nullable=False, primary_key=True)  # 交易日期
+    id = Column(BigInteger, nullable=False, autoincrement=True)  # 自增主键
     
-    # 交易日期
-    date = Column(Date, nullable=False)
+    open = Column(Float)  # 开盘价
+    high = Column(Float)  # 最高价
+    low = Column(Float)  # 最低价
+    close = Column(Float)  # 收盘价
     
-    # OHLC 数据
-    open = Column(Float)
-    high = Column(Float)
-    low = Column(Float)
-    close = Column(Float)
-    
-    # 成交数据
     volume = Column(Float)  # 成交量（股）
     amount = Column(Float)  # 成交额（元）
     pct_chg = Column(Float)  # 涨跌幅（%）
     
-    # 技术指标
-    ma5 = Column(Float)
-    ma10 = Column(Float)
-    ma20 = Column(Float)
+    ma5 = Column(Float)  # 5日均线
+    ma10 = Column(Float)  # 10日均线
+    ma20 = Column(Float)  # 20日均线
     volume_ratio = Column(Float)  # 量比
     
-    # 数据来源
     data_source = Column(String(50))  # 记录数据来源（如 AkshareFetcher）
+    created_at = Column(DateTime, default=datetime.now)  # 创建时间
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)  # 更新时间
     
-    # 更新时间
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    
-    # 唯一约束：同一股票同一日期只能有一条数据
-    __table_args__ = (
-        UniqueConstraint('code', 'date', name='uix_code_date'),
-        Index('ix_code_date', 'code', 'date'),
-    )
+    doris_unique_key = ('code', 'date')
+    doris_distributed_by = None
     
     def __repr__(self):
         return f"<StockDaily(code={self.code}, date={self.date}, close={self.close})>"
@@ -128,96 +142,98 @@ class StockDaily(Base):
         }
 
 
-class NewsIntel(Base):
+class NewsIntel(SQLITE_BASE):
     """
     新闻情报数据模型
 
     存储搜索到的新闻情报条目，用于后续分析与查询
+    
+    Doris UNIQUE KEY 模型：
+    - 主键: url
+    - 分布: HASH(url)
     """
     __tablename__ = 'news_intel'
-
-    # 主键
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    # 关联用户查询操作
-    query_id = Column(String(64))
-
-    # 股票信息
-    code = Column(String(10), nullable=False)
-    name = Column(String(50))
-
-    # 搜索上下文
-    dimension = Column(String(32))  # latest_news / risk_check / earnings / market_analysis / industry
-    query = Column(String(255))
-    provider = Column(String(32))
-
-    # 新闻内容
-    title = Column(String(300), nullable=False)
-    snippet = Column(Text)
-    url = Column(String(1000), nullable=False)
-    source = Column(String(100))
-    published_date = Column(DateTime)
-
-    # 入库时间
-    fetched_at = Column(DateTime, default=datetime.now)
-    query_source = Column(String(32))  # bot/web/cli/system
-    requester_platform = Column(String(20))
-    requester_user_id = Column(String(64))
-    requester_user_name = Column(String(64))
-    requester_chat_id = Column(String(64))
-    requester_message_id = Column(String(64))
-    requester_query = Column(String(255))
 
     __table_args__ = (
         UniqueConstraint('url', name='uix_news_url'),
         Index('ix_news_code_pub', 'code', 'published_date'),
+        {'extend_existing': True},
     )
 
+    url = Column(String(1000), nullable=False, primary_key=True)  # 新闻URL（唯一键）
+    id = Column(BigInteger, nullable=False, autoincrement=True)  # 自增主键
+    
+    query_id = Column(String(64))  # 关联用户查询操作
+    code = Column(String(10), nullable=False)  # 股票代码
+    name = Column(String(50))  # 股票名称
+    
+    dimension = Column(String(32))  # 搜索维度：latest_news / risk_check / earnings / market_analysis / industry
+    query = Column(String(255))  # 搜索查询内容
+    provider = Column(String(32))  # 数据提供商
+    
+    title = Column(String(300), nullable=False)  # 新闻标题
+    snippet = Column(Text)  # 新闻摘要
+    source = Column(String(100))  # 新闻来源
+    published_date = Column(DateTime)  # 发布时间
+    
+    fetched_at = Column(DateTime, default=datetime.now)  # 入库时间
+    query_source = Column(String(32))  # 查询来源：bot/web/cli/system
+    requester_platform = Column(String(20))  # 请求平台
+    requester_user_id = Column(String(64))  # 用户ID
+    requester_user_name = Column(String(64))  # 用户名
+    requester_chat_id = Column(String(64))  # 会话ID
+    requester_message_id = Column(String(64))  # 消息ID
+    requester_query = Column(String(255))  # 原始查询
+
+    doris_unique_key = ('url',)
+    doris_distributed_by = None
+
     def __repr__(self) -> str:
-        return f"<NewsIntel(code={self.code}, title={self.title[:20]}...)>"
+        return f"<NewsIntel(code={self.code}, title={self.title[:20] if self.title else 'N/A'}...)>"
 
 
-class AnalysisHistory(Base):
+class AnalysisHistory(SQLITE_BASE):
     """
     分析结果历史记录模型
 
     保存每次分析结果，支持按 query_id/股票代码检索
+    
+    Doris UNIQUE KEY 模型：
+    - 主键: id (自增)
+    - 分布: HASH(id)
     """
     __tablename__ = 'analysis_history'
 
-    # 主键
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    # 关联查询链路
-    query_id = Column(String(64))
-
-    # 股票信息
-    code = Column(String(10), nullable=False)
-    name = Column(String(50))
-    report_type = Column(String(16))
-
-    # 核心结论
-    sentiment_score = Column(Integer)
-    operation_advice = Column(String(20))
-    trend_prediction = Column(String(50))
-    analysis_summary = Column(Text)
-
-    # 详细数据
-    raw_result = Column(Text)
-    news_content = Column(Text)
-    context_snapshot = Column(Text)
-
-    # 狙击点位（用于回测）
-    ideal_buy = Column(Float)
-    secondary_buy = Column(Float)
-    stop_loss = Column(Float)
-    take_profit = Column(Float)
-
-    created_at = Column(DateTime, default=datetime.now)
-
     __table_args__ = (
         Index('ix_analysis_code_time', 'code', 'created_at'),
+        {'extend_existing': True},
     )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)  # 主键
+    query_id = Column(String(64))  # 关联查询链路
+    
+    code = Column(String(10), nullable=False)  # 股票代码
+    name = Column(String(50))  # 股票名称
+    report_type = Column(String(16))  # 报告类型
+    
+    sentiment_score = Column(Integer)  # 情绪分数
+    operation_advice = Column(String(20))  # 操作建议
+    trend_prediction = Column(String(50))  # 趋势预测
+    analysis_summary = Column(Text)  # 分析摘要
+    
+    raw_result = Column(Text)  # 原始结果JSON
+    news_content = Column(Text)  # 新闻内容
+    context_snapshot = Column(Text)  # 上下文快照JSON
+    
+    ideal_buy = Column(Float)  # 理想买点（用于回测）
+    secondary_buy = Column(Float)  # 次级买点（用于回测）
+    stop_loss = Column(Float)  # 止损价（用于回测）
+    take_profit = Column(Float)  # 止盈价（用于回测）
+    
+    created_at = Column(DateTime, default=datetime.now)  # 创建时间
+
+    doris_unique_key = ('id',)
+    doris_distributed_by = None
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -242,62 +258,16 @@ class AnalysisHistory(Base):
         }
 
 
-class BacktestResult(Base):
-    """单条分析记录的回测结果。"""
+class BacktestResult(SQLITE_BASE):
+    """
+    单条分析记录的回测结果
+    
+    Doris UNIQUE KEY 模型：
+    - 主键: analysis_history_id, eval_window_days, engine_version
+    - 分布: HASH(analysis_history_id)
+    """
 
     __tablename__ = 'backtest_results'
-
-    # 主键
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    analysis_history_id = Column(
-        Integer,
-        ForeignKey('analysis_history.id'),
-        nullable=False,
-    )
-
-    # 冗余字段，便于按股票筛选
-    code = Column(String(10), nullable=False)
-    analysis_date = Column(Date)
-
-    # 回测参数
-    eval_window_days = Column(Integer, nullable=False, default=10)
-    engine_version = Column(String(16), nullable=False, default='v1')
-
-    # 状态
-    eval_status = Column(String(16), nullable=False, default='pending')
-    evaluated_at = Column(DateTime, default=datetime.now)
-
-    # 建议快照（避免未来分析字段变化导致回测不可解释）
-    operation_advice = Column(String(20))
-    position_recommendation = Column(String(8))  # long/cash
-
-    # 价格与收益
-    start_price = Column(Float)
-    end_close = Column(Float)
-    max_high = Column(Float)
-    min_low = Column(Float)
-    stock_return_pct = Column(Float)
-
-    # 方向与结果
-    direction_expected = Column(String(16))  # up/down/flat/not_down
-    direction_correct = Column(Boolean, nullable=True)
-    outcome = Column(String(16))  # win/loss/neutral
-
-    # 目标价命中（仅 long 且配置了止盈/止损时有意义）
-    stop_loss = Column(Float)
-    take_profit = Column(Float)
-    hit_stop_loss = Column(Boolean)
-    hit_take_profit = Column(Boolean)
-    first_hit = Column(String(16))  # take_profit/stop_loss/ambiguous/neither/not_applicable
-    first_hit_date = Column(Date)
-    first_hit_trading_days = Column(Integer)
-
-    # 模拟执行（long-only）
-    simulated_entry_price = Column(Float)
-    simulated_exit_price = Column(Float)
-    simulated_exit_reason = Column(String(24))  # stop_loss/take_profit/window_end/cash/ambiguous_stop_loss
-    simulated_return_pct = Column(Float)
 
     __table_args__ = (
         UniqueConstraint(
@@ -307,52 +277,60 @@ class BacktestResult(Base):
             name='uix_backtest_analysis_window_version',
         ),
         Index('ix_backtest_code_date', 'code', 'analysis_date'),
+        {'extend_existing': True},
     )
 
+    analysis_history_id = Column(Integer, nullable=False, primary_key=True)  # 关联分析记录ID
+    eval_window_days = Column(Integer, nullable=False, default=10, primary_key=True)  # 评估窗口天数
+    engine_version = Column(String(16), nullable=False, default='v1', primary_key=True)  # 引擎版本
+    id = Column(BigInteger, nullable=False, autoincrement=True)  # 自增主键
+    
+    code = Column(String(10), nullable=False)  # 股票代码（冗余字段，便于按股票筛选）
+    analysis_date = Column(Date)  # 分析日期
+    
+    eval_status = Column(String(16), nullable=False, default='pending')  # 评估状态
+    evaluated_at = Column(DateTime, default=datetime.now)  # 评估时间
+    
+    operation_advice = Column(String(20))  # 操作建议快照（避免未来分析字段变化导致回测不可解释）
+    position_recommendation = Column(String(8))  # 仓位建议：long/cash
+    
+    start_price = Column(Float)  # 起始价格
+    end_close = Column(Float)  # 结束价格
+    max_high = Column(Float)  # 最高价
+    min_low = Column(Float)  # 最低价
+    stock_return_pct = Column(Float)  # 股票收益率
+    
+    direction_expected = Column(String(16))  # 预期方向：up/down/flat/not_down
+    direction_correct = Column(Boolean, nullable=True)  # 方向是否正确
+    outcome = Column(String(16))  # 结果：win/loss/neutral
+    
+    stop_loss = Column(Float)  # 止损价（仅 long 且配置了止盈/止损时有意义）
+    take_profit = Column(Float)  # 止盈价
+    hit_stop_loss = Column(Boolean)  # 是否触发止损
+    hit_take_profit = Column(Boolean)  # 是否触发止盈
+    first_hit = Column(String(16))  # 首次触发：take_profit/stop_loss/ambiguous/neither/not_applicable
+    first_hit_date = Column(Date)  # 首次触发日期
+    first_hit_trading_days = Column(Integer)  # 首次触发交易天数
+    
+    simulated_entry_price = Column(Float)  # 模拟入场价（long-only）
+    simulated_exit_price = Column(Float)  # 模拟出场价
+    simulated_exit_reason = Column(String(24))  # 出场原因：stop_loss/take_profit/window_end/cash/ambiguous_stop_loss
+    simulated_return_pct = Column(Float)  # 模拟收益率
 
-class BacktestSummary(Base):
-    """回测汇总指标（按股票或全局）。"""
+    doris_unique_key = ('analysis_history_id', 'eval_window_days', 'engine_version')
+    doris_distributed_by = None
+
+
+class BacktestSummary(SQLITE_BASE):
+    """
+    回测汇总指标（按股票或全局）
+    
+    Doris UNIQUE KEY 模型：
+    - 主键: scope, code, eval_window_days, engine_version
+    - 分布: HASH(scope)
+    """
 
     __tablename__ = 'backtest_summaries'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    scope = Column(String(16), nullable=False)  # overall/stock
-    code = Column(String(16))
-
-    eval_window_days = Column(Integer, nullable=False, default=10)
-    engine_version = Column(String(16), nullable=False, default='v1')
-    computed_at = Column(DateTime, default=datetime.now)
-
-    # 计数
-    total_evaluations = Column(Integer, default=0)
-    completed_count = Column(Integer, default=0)
-    insufficient_count = Column(Integer, default=0)
-    long_count = Column(Integer, default=0)
-    cash_count = Column(Integer, default=0)
-
-    win_count = Column(Integer, default=0)
-    loss_count = Column(Integer, default=0)
-    neutral_count = Column(Integer, default=0)
-
-    # 准确率/胜率
-    direction_accuracy_pct = Column(Float)
-    win_rate_pct = Column(Float)
-    neutral_rate_pct = Column(Float)
-
-    # 收益
-    avg_stock_return_pct = Column(Float)
-    avg_simulated_return_pct = Column(Float)
-
-    # 目标价触发统计（仅 long 且配置止盈/止损时统计）
-    stop_loss_trigger_rate = Column(Float)
-    take_profit_trigger_rate = Column(Float)
-    ambiguous_rate = Column(Float)
-    avg_days_to_first_hit = Column(Float)
-
-    # 诊断字段（JSON 字符串）
-    advice_breakdown_json = Column(Text)
-    diagnostics_json = Column(Text)
 
     __table_args__ = (
         UniqueConstraint(
@@ -362,7 +340,47 @@ class BacktestSummary(Base):
             'engine_version',
             name='uix_backtest_summary_scope_code_window_version',
         ),
+        {'extend_existing': True},
     )
+
+    scope = Column(String(16), nullable=False, primary_key=True)  # 范围：overall/stock
+    code = Column(String(16), primary_key=True)  # 股票代码（overall时为空）
+    eval_window_days = Column(Integer, nullable=False, default=10, primary_key=True)  # 评估窗口天数
+    engine_version = Column(String(16), nullable=False, default='v1', primary_key=True)  # 引擎版本
+    id = Column(BigInteger, nullable=False, autoincrement=True)  # 自增主键
+    
+    computed_at = Column(DateTime, default=datetime.now)  # 计算时间
+    
+    total_evaluations = Column(Integer, default=0)  # 总评估数
+    completed_count = Column(Integer, default=0)  # 完成数
+    insufficient_count = Column(Integer, default=0)  # 数据不足数
+    long_count = Column(Integer, default=0)  # 做多数
+    cash_count = Column(Integer, default=0)  # 空仓数
+    
+    win_count = Column(Integer, default=0)  # 盈利数
+    loss_count = Column(Integer, default=0)  # 亏损数
+    neutral_count = Column(Integer, default=0)  # 中性数
+    
+    direction_accuracy_pct = Column(Float)  # 方向准确率
+    win_rate_pct = Column(Float)  # 胜率
+    neutral_rate_pct = Column(Float)  # 中性率
+    
+    avg_stock_return_pct = Column(Float)  # 平均股票收益
+    avg_simulated_return_pct = Column(Float)  # 平均模拟收益
+    
+    stop_loss_trigger_rate = Column(Float)  # 止损触发率（仅 long 且配置止盈/止损时统计）
+    take_profit_trigger_rate = Column(Float)  # 止盈触发率
+    ambiguous_rate = Column(Float)  # 模糊率
+    avg_days_to_first_hit = Column(Float)  # 平均触发天数
+    
+    advice_breakdown_json = Column(Text)  # 建议分布JSON
+    diagnostics_json = Column(Text)  # 诊断JSON
+
+    doris_unique_key = ('scope', 'code', 'eval_window_days', 'engine_version')
+    doris_distributed_by = None
+
+
+ALL_MODELS = [StockDaily, NewsIntel, AnalysisHistory, BacktestResult, BacktestSummary]
 
 
 class DatabaseManager:
@@ -402,31 +420,157 @@ class DatabaseManager:
             db_url = config.get_db_url()
             self._is_doris = config.database_type == 'doris'
         
-        # 创建数据库引擎
         self._engine = create_engine(
             db_url,
-            echo=False,  # 设为 True 可查看 SQL 语句
-            pool_pre_ping=True,  # 连接健康检查
+            echo=False,
+            pool_pre_ping=True,
         )
         
-        # 创建 Session 工厂
         self._SessionLocal = sessionmaker(
             bind=self._engine,
             autocommit=False,
             autoflush=False,
         )
         
-        # 创建所有表（Doris 模式下跳过，因为需要手动创建表）
         if not self._is_doris:
-            Base.metadata.create_all(self._engine)
+            SQLITE_BASE.metadata.create_all(self._engine)
         else:
             logger.info("Doris 模式：跳过自动创建表，需要手动创建表")
+            self._create_doris_tables()
 
         self._initialized = True
-        logger.info(f"数据库初始化完成: {db_url} (类型: {'Doris' if self._is_doris else 'SQLite'})")
+        logger.info(f"数据库初始化完成: {db_url.split('@')[-1] if '@' in db_url else db_url} (类型: {'Doris' if self._is_doris else 'SQLite'})")
 
-        # 注册退出钩子，确保程序退出时关闭数据库连接
         atexit.register(DatabaseManager._cleanup_engine, self._engine)
+    
+    def _create_doris_tables(self) -> None:
+        """创建 Doris 表（使用 UNIQUE KEY 模型）"""
+        try:
+            HASH = _get_doris_distributed()
+            
+            with self._engine.connect() as conn:
+                for model in ALL_MODELS:
+                    table_name = model.__tablename__
+                    
+                    result = conn.execute(text(f"SHOW TABLES LIKE '{table_name}'"))
+                    if result.fetchone():
+                        logger.info(f"Doris 表 {table_name} 已存在，跳过创建")
+                        continue
+                    
+                    create_sql = self._generate_doris_create_table_sql(model, HASH)
+                    if create_sql:
+                        conn.execute(text(create_sql))
+                        conn.commit()
+                        logger.info(f"Doris 表 {table_name} 创建成功")
+                        
+        except Exception as e:
+            logger.warning(f"创建 Doris 表时出错: {e}")
+    
+    def _generate_doris_create_table_sql(self, model, HASH) -> Optional[str]:
+        """生成 Doris CREATE TABLE SQL"""
+        table_name = model.__tablename__
+        unique_key = getattr(model, 'doris_unique_key', None)
+        
+        if not unique_key:
+            return None
+        
+        key_columns_sql = []
+        other_columns_sql = []
+        
+        for col in model.__table__.columns:
+            col_type = self._get_doris_column_type(col)
+            nullable = "" if col.nullable else " NOT NULL"
+            auto_inc = " AUTO_INCREMENT" if col.autoincrement and col.name == 'id' else ""
+            default_val = ""
+            if col.default is not None:
+                if hasattr(col.default, 'arg'):
+                    if callable(col.default.arg):
+                        pass
+                    else:
+                        default_val = f" DEFAULT '{col.default.arg}'"
+            
+            col_sql = f"    `{col.name}` {col_type}{nullable}{auto_inc}{default_val}"
+            
+            if col.name in unique_key:
+                key_columns_sql.append((unique_key.index(col.name), col_sql))
+            else:
+                other_columns_sql.append(col_sql)
+        
+        key_columns_sql.sort(key=lambda x: x[0])
+        columns_sql = [col_sql for _, col_sql in key_columns_sql] + other_columns_sql
+        
+        unique_key_sql = f"UNIQUE KEY ({', '.join([f'`{k}`' for k in unique_key])})"
+        
+        if HASH:
+            if table_name == 'stock_daily':
+                dist_sql = "DISTRIBUTED BY HASH(`code`) BUCKETS 3"
+            elif table_name == 'news_intel':
+                dist_sql = "DISTRIBUTED BY HASH(`url`) BUCKETS 3"
+            elif table_name == 'analysis_history':
+                dist_sql = "DISTRIBUTED BY HASH(`id`) BUCKETS 3"
+            elif table_name == 'backtest_results':
+                dist_sql = "DISTRIBUTED BY HASH(`analysis_history_id`) BUCKETS 3"
+            elif table_name == 'backtest_summaries':
+                dist_sql = "DISTRIBUTED BY HASH(`scope`) BUCKETS 3"
+            else:
+                dist_sql = f"DISTRIBUTED BY HASH(`{unique_key[0]}`) BUCKETS 3"
+        else:
+            dist_sql = f"DISTRIBUTED BY HASH(`{unique_key[0]}`) BUCKETS 3"
+        
+        properties = '''PROPERTIES (
+    "replication_allocation" = "tag.location.default: 1"
+)'''
+        
+        sql = f"""CREATE TABLE IF NOT EXISTS `{table_name}` (
+{',\n'.join(columns_sql)}
+)
+{unique_key_sql}
+{dist_sql}
+{properties}"""
+        
+        return sql
+    
+    def _get_doris_column_type(self, col) -> str:
+        """获取 Doris 列类型"""
+        col_type = str(col.type)
+        
+        type_mapping = {
+            'INTEGER': 'INT',
+            'BIGINT': 'BIGINT',
+            'SMALLINT': 'SMALLINT',
+            'TINYINT': 'TINYINT',
+            'VARCHAR': 'VARCHAR',
+            'CHAR': 'CHAR',
+            'STRING': 'VARCHAR',
+            'TEXT': 'STRING',
+            'FLOAT': 'DOUBLE',
+            'DOUBLE': 'DOUBLE',
+            'DECIMAL': 'DECIMAL',
+            'NUMERIC': 'DECIMAL',
+            'BOOLEAN': 'BOOLEAN',
+            'DATE': 'DATE',
+            'DATETIME': 'DATETIME',
+        }
+        
+        for key, value in type_mapping.items():
+            if col_type.upper().startswith(key):
+                if key == 'VARCHAR':
+                    match = re.search(r'VARCHAR\((\d+)\)', col_type.upper())
+                    if match:
+                        return f"VARCHAR({match.group(1)})"
+                if key == 'CHAR':
+                    match = re.search(r'CHAR\((\d+)\)', col_type.upper())
+                    if match:
+                        return f"CHAR({match.group(1)})"
+                if key in ('DECIMAL', 'NUMERIC'):
+                    match = re.search(r'(?:DECIMAL|NUMERIC)\((\d+),?\s*(\d*)\)', col_type.upper())
+                    if match:
+                        precision = match.group(1)
+                        scale = match.group(2) if match.group(2) else '0'
+                        return f"DECIMAL({precision}, {scale})"
+                return value
+        
+        return 'STRING'
     
     @property
     def is_doris(self) -> bool:
@@ -560,7 +704,7 @@ class DatabaseManager:
 
         关联策略：
         - query_context 记录用户查询信息（平台、用户、会话、原始指令等）
-        - Doris 使用先删除后插入的方式实现 UPSERT（避免 strict mode 错误）
+        - Doris UNIQUE KEY 模型自动实现 UPSERT
         - SQLite 使用先查询后更新/插入
         """
         if not response or not response.results:
@@ -572,148 +716,49 @@ class DatabaseManager:
 
         with self.get_session() as session:
             try:
-                if self.is_doris:
-                    # Doris 使用先删除后插入的方式实现 UPSERT（避免 strict mode 错误）
-                    for item in response.results:
-                        title = (item.title or '').strip()
-                        url = (item.url or '').strip()
-                        source = (item.source or '').strip()
-                        snippet = (item.snippet or '').strip()
-                        published_date = self._parse_published_date(item.published_date)
+                for item in response.results:
+                    title = (item.title or '').strip()
+                    url = (item.url or '').strip()
+                    source = (item.source or '').strip()
+                    snippet = (item.snippet or '').strip()
+                    published_date = self._parse_published_date(item.published_date)
 
-                        if not title and not url:
-                            continue
+                    if not title and not url:
+                        continue
 
-                        url_key = url or self._build_fallback_url_key(
-                            code=code,
-                            title=title,
-                            source=source,
-                            published_date=published_date
-                        )
+                    url_key = url or self._build_fallback_url_key(
+                        code=code,
+                        title=title,
+                        source=source,
+                        published_date=published_date
+                    )
 
-                        # 先删除已存在的记录
-                        session.execute(
-                            NewsIntel.__table__.delete().where(
-                                NewsIntel.url == url_key
-                            )
-                        )
-
-                        # 插入新记录
-                        record = NewsIntel(
-                            code=code,
-                            name=name,
-                            dimension=dimension,
-                            query=query,
-                            provider=response.provider,
-                            title=title,
-                            snippet=snippet,
-                            url=url_key,
-                            source=source,
-                            published_date=published_date,
-                            fetched_at=datetime.now(),
-                            query_id=current_query_id or None,
-                            query_source=query_ctx.get("query_source"),
-                            requester_platform=query_ctx.get("requester_platform"),
-                            requester_user_id=query_ctx.get("requester_user_id"),
-                            requester_user_name=query_ctx.get("requester_user_name"),
-                            requester_chat_id=query_ctx.get("requester_chat_id"),
-                            requester_message_id=query_ctx.get("requester_message_id"),
-                            requester_query=query_ctx.get("requester_query"),
-                        )
-                        session.add(record)
-                        saved_count += 1
-                else:
-                    # SQLite 使用先查询后更新/插入
-                    for item in response.results:
-                        title = (item.title or '').strip()
-                        url = (item.url or '').strip()
-                        source = (item.source or '').strip()
-                        snippet = (item.snippet or '').strip()
-                        published_date = self._parse_published_date(item.published_date)
-
-                        if not title and not url:
-                            continue
-
-                        url_key = url or self._build_fallback_url_key(
-                            code=code,
-                            title=title,
-                            source=source,
-                            published_date=published_date
-                        )
-
-                        # 优先按 URL 或兜底键去重
-                        existing = session.execute(
-                            select(NewsIntel).where(NewsIntel.url == url_key)
-                        ).scalar_one_or_none()
-
-                        if existing:
-                            existing.name = name or existing.name
-                            existing.dimension = dimension or existing.dimension
-                            existing.query = query or existing.query
-                            existing.provider = response.provider or existing.provider
-                            existing.snippet = snippet or existing.snippet
-                            existing.source = source or existing.source
-                            existing.published_date = published_date or existing.published_date
-                            existing.fetched_at = datetime.now()
-
-                            if query_context:
-                                # Keep the first query_id to avoid overwriting historical links.
-                                if not existing.query_id and current_query_id:
-                                    existing.query_id = current_query_id
-                                existing.query_source = (
-                                    query_context.get("query_source") or existing.query_source
-                                )
-                                existing.requester_platform = (
-                                    query_context.get("requester_platform") or existing.requester_platform
-                                )
-                                existing.requester_user_id = (
-                                    query_context.get("requester_user_id") or existing.requester_user_id
-                                )
-                                existing.requester_user_name = (
-                                    query_context.get("requester_user_name") or existing.requester_user_name
-                                )
-                                existing.requester_chat_id = (
-                                    query_context.get("requester_chat_id") or existing.requester_chat_id
-                                )
-                                existing.requester_message_id = (
-                                    query_context.get("requester_message_id") or existing.requester_message_id
-                                )
-                                existing.requester_query = (
-                                    query_context.get("requester_query") or existing.requester_query
-                                )
-                        else:
-                            try:
-                                with session.begin_nested():
-                                    record = NewsIntel(
-                                        code=code,
-                                        name=name,
-                                        dimension=dimension,
-                                        query=query,
-                                        provider=response.provider,
-                                        title=title,
-                                        snippet=snippet,
-                                        url=url_key,
-                                        source=source,
-                                        published_date=published_date,
-                                        fetched_at=datetime.now(),
-                                        query_id=current_query_id or None,
-                                        query_source=query_ctx.get("query_source"),
-                                        requester_platform=query_ctx.get("requester_platform"),
-                                        requester_user_id=query_ctx.get("requester_user_id"),
-                                        requester_user_name=query_ctx.get("requester_user_name"),
-                                        requester_chat_id=query_ctx.get("requester_chat_id"),
-                                        requester_message_id=query_ctx.get("requester_message_id"),
-                                        requester_query=query_ctx.get("requester_query"),
-                                    )
-                                    session.add(record)
-                                    session.flush()
-                                saved_count += 1
-                            except IntegrityError:
-                                # 单条 URL 唯一约束冲突（如并发插入），仅跳过本条，保留本批其余成功项
-                                logger.debug("新闻情报重复（已跳过）: %s %s", code, url_key)
+                    record = NewsIntel(
+                        url=url_key,
+                        code=code,
+                        name=name,
+                        dimension=dimension,
+                        query=query,
+                        provider=response.provider,
+                        title=title,
+                        snippet=snippet,
+                        source=source,
+                        published_date=published_date,
+                        fetched_at=datetime.now(),
+                        query_id=current_query_id or None,
+                        query_source=query_ctx.get("query_source"),
+                        requester_platform=query_ctx.get("requester_platform"),
+                        requester_user_id=query_ctx.get("requester_user_id"),
+                        requester_user_name=query_ctx.get("requester_user_name"),
+                        requester_chat_id=query_ctx.get("requester_chat_id"),
+                        requester_message_id=query_ctx.get("requester_message_id"),
+                        requester_query=query_ctx.get("requester_query"),
+                    )
+                    session.merge(record)
+                    saved_count += 1
 
                 session.commit()
-                logger.info(f"保存新闻情报成功: {code}, 新增 {saved_count} 条")
+                logger.info(f"保存新闻情报成功: {code}, 处理 {saved_count} 条")
 
             except Exception as e:
                 session.rollback()
@@ -884,20 +929,15 @@ class DatabaseManager:
             if code:
                 conditions.append(AnalysisHistory.code == code)
             if start_date:
-                # created_at >= start_date 00:00:00
                 conditions.append(AnalysisHistory.created_at >= datetime.combine(start_date, datetime.min.time()))
             if end_date:
-                # created_at < end_date+1 00:00:00 (即 <= end_date 23:59:59)
                 conditions.append(AnalysisHistory.created_at < datetime.combine(end_date + timedelta(days=1), datetime.min.time()))
             
-            # 构建 where 子句
             where_clause = and_(*conditions) if conditions else True
             
-            # 查询总数
             total_query = select(func.count(AnalysisHistory.id)).where(where_clause)
             total = session.execute(total_query).scalar() or 0
             
-            # 查询分页数据
             data_query = (
                 select(AnalysisHistory)
                 .where(where_clause)
@@ -951,9 +991,8 @@ class DatabaseManager:
         保存日线数据到数据库
         
         策略：
-        - 使用 UPSERT 逻辑（存在则更新，不存在则插入）
-        - Doris 使用先删除后插入的方式实现 UPSERT（避免 strict mode 错误）
-        - SQLite 使用先查询后更新/插入
+        - Doris UNIQUE KEY 模型自动实现 UPSERT
+        - SQLite 使用 merge 或先查询后更新/插入
         
         Args:
             df: 包含日线数据的 DataFrame
@@ -971,60 +1010,35 @@ class DatabaseManager:
         
         with self.get_session() as session:
             try:
-                if self.is_doris:
-                    # Doris 使用先删除后插入的方式实现 UPSERT（避免 strict mode 错误）
-                    for _, row in df.iterrows():
-                        # 解析日期
-                        row_date = row.get('date')
-                        if isinstance(row_date, str):
-                            row_date = datetime.strptime(row_date, '%Y-%m-%d').date()
-                        elif isinstance(row_date, datetime):
-                            row_date = row_date.date()
-                        elif isinstance(row_date, pd.Timestamp):
-                            row_date = row_date.date()
-                        
-                        # 先删除已存在的记录
-                        session.execute(
-                            StockDaily.__table__.delete().where(
-                                and_(
-                                    StockDaily.code == code,
-                                    StockDaily.date == row_date
-                                )
-                            )
-                        )
-                        
-                        # 插入新记录
-                        record = StockDaily(
-                            code=code,
-                            date=row_date,
-                            open=row.get('open'),
-                            high=row.get('high'),
-                            low=row.get('low'),
-                            close=row.get('close'),
-                            volume=row.get('volume'),
-                            amount=row.get('amount'),
-                            pct_chg=row.get('pct_chg'),
-                            ma5=row.get('ma5'),
-                            ma10=row.get('ma10'),
-                            ma20=row.get('ma20'),
-                            volume_ratio=row.get('volume_ratio'),
-                            data_source=data_source,
-                        )
-                        session.add(record)
-                        saved_count += 1
-                else:
-                    # SQLite 使用先查询后更新/插入
-                    for _, row in df.iterrows():
-                        # 解析日期
-                        row_date = row.get('date')
-                        if isinstance(row_date, str):
-                            row_date = datetime.strptime(row_date, '%Y-%m-%d').date()
-                        elif isinstance(row_date, datetime):
-                            row_date = row_date.date()
-                        elif isinstance(row_date, pd.Timestamp):
-                            row_date = row_date.date()
-                        
-                        # 检查是否已存在
+                for _, row in df.iterrows():
+                    row_date = row.get('date')
+                    if isinstance(row_date, str):
+                        row_date = datetime.strptime(row_date, '%Y-%m-%d').date()
+                    elif isinstance(row_date, datetime):
+                        row_date = row_date.date()
+                    elif isinstance(row_date, pd.Timestamp):
+                        row_date = row_date.date()
+                    
+                    record = StockDaily(
+                        code=code,
+                        date=row_date,
+                        open=row.get('open'),
+                        high=row.get('high'),
+                        low=row.get('low'),
+                        close=row.get('close'),
+                        volume=row.get('volume'),
+                        amount=row.get('amount'),
+                        pct_chg=row.get('pct_chg'),
+                        ma5=row.get('ma5'),
+                        ma10=row.get('ma10'),
+                        ma20=row.get('ma20'),
+                        volume_ratio=row.get('volume_ratio'),
+                        data_source=data_source,
+                    )
+                    
+                    if self.is_doris:
+                        session.merge(record)
+                    else:
                         existing = session.execute(
                             select(StockDaily).where(
                                 and_(
@@ -1035,7 +1049,6 @@ class DatabaseManager:
                         ).scalar_one_or_none()
                         
                         if existing:
-                            # 更新现有记录
                             existing.open = row.get('open')
                             existing.high = row.get('high')
                             existing.low = row.get('low')
@@ -1050,35 +1063,18 @@ class DatabaseManager:
                             existing.data_source = data_source
                             existing.updated_at = datetime.now()
                         else:
-                            # 创建新记录
-                            record = StockDaily(
-                                code=code,
-                                date=row_date,
-                                open=row.get('open'),
-                                high=row.get('high'),
-                                low=row.get('low'),
-                                close=row.get('close'),
-                                volume=row.get('volume'),
-                                amount=row.get('amount'),
-                                pct_chg=row.get('pct_chg'),
-                                ma5=row.get('ma5'),
-                                ma10=row.get('ma10'),
-                                ma20=row.get('ma20'),
-                                volume_ratio=row.get('volume_ratio'),
-                                data_source=data_source,
-                            )
                             session.add(record)
                             saved_count += 1
                 
                 session.commit()
-                logger.info(f"保存 {code} 数据成功，处理 {saved_count} 条")
+                logger.info(f"保存 {code} 数据成功，处理 {len(df)} 条")
                 
             except Exception as e:
                 session.rollback()
                 logger.error(f"保存 {code} 数据失败: {e}")
                 raise
         
-        return saved_count
+        return len(df) if self.is_doris else saved_count
     
     def get_analysis_context(
         self, 
@@ -1100,7 +1096,6 @@ class DatabaseManager:
         if target_date is None:
             target_date = date.today()
         
-        # 获取最近2天数据
         recent_data = self.get_latest_data(code, days=2)
         
         if not recent_data:
@@ -1119,7 +1114,6 @@ class DatabaseManager:
         if yesterday_data:
             context['yesterday'] = yesterday_data.to_dict()
             
-            # 计算相比昨日的变化
             if yesterday_data.volume and yesterday_data.volume > 0:
                 context['volume_change_ratio'] = round(
                     today_data.volume / yesterday_data.volume, 2
@@ -1130,7 +1124,6 @@ class DatabaseManager:
                     (today_data.close - yesterday_data.close) / yesterday_data.close * 100, 2
                 )
             
-            # 均线形态判断
             context['ma_status'] = self._analyze_ma_status(today_data)
         
         return context
@@ -1175,7 +1168,6 @@ class DatabaseManager:
         if not text:
             return None
 
-        # 优先尝试 ISO 格式
         try:
             return datetime.fromisoformat(text)
         except ValueError:
@@ -1232,24 +1224,20 @@ class DatabaseManager:
         if not text:
             return None
 
-        # 尝试直接解析纯数字字符串
         try:
             return float(text)
         except ValueError:
             pass
 
-        # 优先截取 "：" 到 "元" 之间的价格，避免误提取 MA5/MA10 等技术指标数字
         colon_pos = max(text.rfind("："), text.rfind(":"))
         yuan_pos = text.find("元", colon_pos + 1 if colon_pos != -1 else 0)
         if yuan_pos != -1:
             segment_start = colon_pos + 1 if colon_pos != -1 else 0
             segment = text[segment_start:yuan_pos]
             
-            # 使用 finditer 并过滤掉 MA 开头的数字
             matches = list(re.finditer(r"-?\d+(?:\.\d+)?", segment))
             valid_numbers = []
             for m in matches:
-                # 检查前面是否是 "MA" (忽略大小写)
                 start_idx = m.start()
                 if start_idx >= 2:
                     prefix = segment[start_idx-2:start_idx].upper()
@@ -1295,26 +1283,23 @@ class DatabaseManager:
         return f"no-url:{code}:{digest}"
 
 
-# 便捷函数
 def get_db() -> DatabaseManager:
     """获取数据库管理器实例的快捷方式"""
     return DatabaseManager.get_instance()
 
 
 if __name__ == "__main__":
-    # 测试代码
     logging.basicConfig(level=logging.DEBUG)
     
     db = get_db()
     
     print("=== 数据库测试 ===")
     print(f"数据库初始化成功")
+    print(f"数据库类型: {'Doris' if db.is_doris else 'SQLite'}")
     
-    # 测试检查今日数据
     has_data = db.has_today_data('600519')
     print(f"茅台今日是否有数据: {has_data}")
     
-    # 测试保存数据
     test_df = pd.DataFrame({
         'date': [date.today()],
         'open': [1800.0],
@@ -1333,6 +1318,5 @@ if __name__ == "__main__":
     saved = db.save_daily_data(test_df, '600519', 'TestSource')
     print(f"保存测试数据: {saved} 条")
     
-    # 测试获取上下文
     context = db.get_analysis_context('600519')
     print(f"分析上下文: {context}")
