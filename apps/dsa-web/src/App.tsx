@@ -4,6 +4,10 @@ import HomePage from './pages/HomePage';
 import BacktestPage from './pages/BacktestPage';
 import SettingsPage from './pages/SettingsPage';
 import NotFoundPage from './pages/NotFoundPage';
+import PortfolioListPage from './pages/PortfolioListPage';
+import PortfolioCreatePage from './pages/PortfolioCreatePage';
+import PortfolioDetailPage from './pages/PortfolioDetailPage';
+import PortfolioPerformancePage from './pages/PortfolioPerformancePage';
 import './App.css';
 
 // 侧边导航图标
@@ -18,6 +22,17 @@ const BacktestIcon: React.FC<{ active?: boolean }> = ({active}) => (
     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={active ? 2 : 1.5}
               d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
+    </svg>
+);
+
+const PortfolioIcon: React.FC<{ active?: boolean }> = ({active}) => (
+    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={active ? 2 : 1.5}
+            d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+        />
     </svg>
 );
 
@@ -42,6 +57,12 @@ const NAV_ITEMS: DockItem[] = [
         label: '首页',
         to: '/',
         icon: HomeIcon,
+    },
+    {
+        key: 'portfolios',
+        label: '组合',
+        to: '/portfolios',
+        icon: PortfolioIcon,
     },
     {
         key: 'backtest',
@@ -104,6 +125,11 @@ const App: React.FC = () => {
                 <main className="flex-1 dock-safe-area">
                     <Routes>
                         <Route path="/" element={<HomePage/>}/>
+                        <Route path="/portfolios" element={<PortfolioListPage/>}/>
+                        <Route path="/portfolios/create" element={<PortfolioCreatePage/>}/>
+                        <Route path="/portfolios/:id" element={<PortfolioDetailPage/>}/>
+                        <Route path="/portfolios/:id/edit" element={<PortfolioCreatePage/>}/>
+                        <Route path="/portfolios/:id/performance" element={<PortfolioPerformancePage/>}/>
                         <Route path="/backtest" element={<BacktestPage/>}/>
                         <Route path="/settings" element={<SettingsPage/>}/>
                         <Route path="*" element={<NotFoundPage/>}/>
