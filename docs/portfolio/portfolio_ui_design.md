@@ -422,22 +422,31 @@ const PortfolioIcon: React.FC<{ active?: boolean }> = ({ active }) => (
 │ │ 摘要卡片                                                              ││
 │ │ ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐         ││
 │ │ │ 总市值     │ │ 总盈亏     │ │ 持仓数     │ │ 最佳表现   │         ││
-│ │ │ ¥102,500   │ │ +2.50%     │ │ 5只股票    │ │ 600519     │         ││
-│ │ │            │ │ +¥2,500    │ │            │ │ +5.2%      │         ││
+│ │ │ ¥103,500   │ │ +3.50%     │ │ 5只活跃    │ │ 600519     │         ││
+│ │ │            │ │ +¥3,500    │ │ 2只已平仓  │ │ +5.2%      │         ││
 │ │ └────────────┘ └────────────┘ └────────────┘ └────────────┘         ││
+│ │ ┌────────────┐ ┌────────────┐                                      ││
+│ │ │ 浮动盈亏   │ │ 已实现盈亏 │                                      ││
+│ │ │ +2.00%     │ │ +1.50%     │                                      ││
+│ │ │ +¥2,000    │ │ +¥1,500    │                                      ││
+│ │ └────────────┘ └────────────┘                                      ││
 │ │                                                                      ││
 │ │ 标签页                                                               ││
 │ │ ┌──────────────────────────────────────────────────────────────────┐││
 │ │ │ [持仓列表]  [收益走势]  [历史记录]                               │││
 │ │ └──────────────────────────────────────────────────────────────────┘││
 │ │                                                                      ││
-│ │ 持仓表格                                                             ││
+│ │ 持仓表格（按状态排序：活跃持仓优先，已平仓在下方）                   ││
 │ │ ┌──────────────────────────────────────────────────────────────────┐││
 │ │ │ 代码  │ 名称           │ 建仓价格  │ 当前价格  │ 占比  │ 盈亏   │││
 │ │ ├───────┼────────────────┼───────────┼───────────┼───────┼────────┤││
 │ │ │600519 │ 贵州茅台       │ 1800.00   │ 1890.00   │50.00% │+5.00%  │││
 │ │ │00700  │ 腾讯控股       │ 350.00    │ 340.00    │30.00% │-2.86%  │││
 │ │ │AAPL   │ 苹果公司       │ 180.00    │ 185.00    │20.00% │+2.78%  │││
+│ │ ├───────┴────────────────┴───────────┴───────────┴───────┴────────┤││
+│ │ │ ──────────────── 已平仓持仓 ─────────────────────               │││
+│ │ │BABA   │ 阿里巴巴       │ 85.00     │ 90.00     │ --    │+5.88%  │││
+│ │ │       │ 2026-02-15平仓 │ 平仓价¥90 │ 100股     │       │+¥500   │││
 │ │ └──────────────────────────────────────────────────────────────────┘││
 │ │                                                                      ││
 │ │ 仓位分布图                                                           ││
@@ -481,9 +490,13 @@ const PortfolioIcon: React.FC<{ active?: boolean }> = ({ active }) => (
         <th class="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider">
           状态
         </th>
+        <th class="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider text-center">
+          操作
+        </th>
       </tr>
     </thead>
     <tbody>
+      <!-- 活跃持仓 -->
       <tr class="border-t border-white/5 hover:bg-hover transition-colors">
         <td class="px-3 py-2 font-mono text-cyan text-xs">600519</td>
         <td class="px-3 py-2 text-xs text-white">贵州茅台</td>
@@ -494,10 +507,54 @@ const PortfolioIcon: React.FC<{ active?: boolean }> = ({ active }) => (
         <td class="px-3 py-2">
           <span class="badge badge-success">活跃</span>
         </td>
+        <td class="px-3 py-2 text-center">
+          <button class="btn-close-position">平仓</button>
+        </td>
+      </tr>
+      <!-- 已平仓持仓（灰色显示） -->
+      <tr class="border-t border-white/5 bg-white/[0.02] opacity-60">
+        <td class="px-3 py-2 font-mono text-muted text-xs">BABA</td>
+        <td class="px-3 py-2 text-xs text-secondary">阿里巴巴</td>
+        <td class="px-3 py-2 text-xs font-mono text-right text-muted">¥85.00</td>
+        <td class="px-3 py-2 text-xs font-mono text-right text-muted">¥90.00</td>
+        <td class="px-3 py-2 text-xs font-mono text-right text-muted">--</td>
+        <td class="px-3 py-2 text-xs font-mono text-right text-success">+5.88%</td>
+        <td class="px-3 py-2">
+          <span class="badge badge-neutral">已平仓</span>
+        </td>
+        <td class="px-3 py-2 text-xs text-muted text-center">
+          2026-02-15
+        </td>
       </tr>
     </tbody>
   </table>
 </div>
+```
+
+#### 平仓按钮样式
+
+```css
+.btn-close-position {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #ff4466;
+  background: rgba(255, 68, 102, 0.1);
+  border: 1px solid rgba(255, 68, 102, 0.3);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-close-position:hover {
+  background: rgba(255, 68, 102, 0.2);
+  border-color: rgba(255, 68, 102, 0.5);
+  box-shadow: 0 0 12px rgba(255, 68, 102, 0.3);
+}
+
+.btn-close-position:active {
+  transform: scale(0.95);
+}
 ```
 
 ---
@@ -539,8 +596,13 @@ const PortfolioIcon: React.FC<{ active?: boolean }> = ({ active }) => (
 │ │ 统计面板                                                             ││
 │ │ ┌──────────────────────────────────────────────────────────────────┐ ││
 │ │ │ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐  │ ││
-│ │ │ │ 总收益率    │ │ 最大回撤    │ │ 最佳交易日  │ │ 最差交易日  │  │ ││
-│ │ │ │ +2.50%      │ │ -1.20%      │ │ +1.50%      │ │ -0.80%      │  │ ││
+│ │ │ │ 总收益率    │ │ 浮动盈亏    │ │ 已实现盈亏  │ │ 最大回撤    │  │ ││
+│ │ │ │ +3.50%      │ │ +2.00%      │ │ +1.50%      │ │ -1.20%      │  │ ││
+│ │ │ │             │ │ +¥2,000     │ │ +¥1,500     │ │             │  │ ││
+│ │ │ └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘  │ ││
+│ │ │ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐  │ ││
+│ │ │ │ 最佳交易日  │ │ 最差交易日  │ │ 活跃持仓    │ │ 本周平仓    │  │ ││
+│ │ │ │ +1.50%      │ │ -0.80%      │ │ 5只         │ │ 2只         │  │ ││
 │ │ │ └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘  │ ││
 │ │ └──────────────────────────────────────────────────────────────────┘ ││
 │ │                                                                      ││
@@ -551,6 +613,10 @@ const PortfolioIcon: React.FC<{ active?: boolean }> = ({ active }) => (
 │ │ │ 600519  │ +2.50%   │ +5.00%   │ 50.00% │ ████████████           │ ││
 │ │ │ 00700   │ -0.86%   │ -2.86%   │ 30.00% │ ███░░░░░░░             │ ││
 │ │ │ AAPL    │ +0.56%   │ +2.78%   │ 20.00% │ ██████░░░░░            │ ││
+│ │ ├─────────┴──────────┴──────────┴────────┴────────────────────────┤ ││
+│ │ │ 已平仓持仓收益                                                   │ ││
+│ │ │ BABA   │ +0.50%   │ +5.88%   │ 已平仓 │ 平仓盈亏: +¥500        │ ││
+│ │ │ JD     │ +1.00%   │ +3.33%   │ 已平仓 │ 平仓盈亏: +¥1,000      │ ││
 │ │ └──────────────────────────────────────────────────────────────────┘ ││
 │ │                                                                      ││
 │ └──────────────────────────────────────────────────────────────────────┘│
@@ -563,13 +629,21 @@ const PortfolioIcon: React.FC<{ active?: boolean }> = ({ active }) => (
 ┌─────────────────────────────────────┐
 │ 2026年2月14日                       │
 │ ─────────────────────               │
-│ 组合：+2.35%                        │
+│ 总盈亏：+3.50%                      │
 │                                     │
+│ 浮动盈亏：+2.00% (+¥2,000)          │
+│ 已实现盈亏：+1.50% (+¥1,500)        │
+│                                     │
+│ ─────────────────────               │
+│ 活跃持仓：                          │
 │ 600519：+4.80%                      │
 │ 00700：-1.50%                       │
 │ AAPL：+2.20%                        │
 │                                     │
-│ 总市值：¥102,350                    │
+│ 本周平仓：                          │
+│ BABA：+¥500                         │
+│                                     │
+│ 总市值：¥103,500                    │
 └─────────────────────────────────────┘
 ```
 
@@ -596,6 +670,481 @@ const PortfolioIcon: React.FC<{ active?: boolean }> = ({ active }) => (
 │                              [取消]  [删除组合]              │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 3.6 平仓确认弹窗
+
+#### 全部平仓弹窗
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 平仓持仓                                              [×]  │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  持仓信息                                                    │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │ 600519 - 贵州茅台                                      │ │
+│  │ 建仓价格：¥1,800.00  │  持仓数量：100股  │  占比：50%  │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  平仓方式                                                    │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │ ○ 按当前收盘价卖出（推荐）                              │ │
+│  │   当前收盘价：¥1,890.00  [刷新价格]                     │ │
+│  │                                                         │ │
+│  │ ○ 指定价格卖出                                          │ │
+│  │   卖出价格：¥ [________]                                │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  平仓数量                                                    │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │ ● 全部平仓（100股）                                     │ │
+│  │ ○ 部分平仓                                              │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  ─────────────────────────────────────────────────────────  │
+│                                                             │
+│  盈亏预览                                                    │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │                                                         │ │
+│  │   预计盈亏：  +¥9,000.00  (+5.00%)                      │ │
+│  │   平仓金额：  ¥189,000.00                               │ │
+│  │   交易费用：  ¥189.00（估算）                           │ │
+│  │                                                         │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  ⚠️ 平仓操作不可撤销，请确认信息无误。                       │
+│                                                             │
+│                              [取消]  [确认平仓]              │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 部分平仓弹窗
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 部分平仓                                              [×]  │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  持仓信息                                                    │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │ 600519 - 贵州茅台                                      │ │
+│  │ 建仓价格：¥1,800.00  │  持仓数量：100股  │  占比：50%  │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  平仓方式                                                    │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │ ● 按当前收盘价卖出（推荐）                              │ │
+│  │   当前收盘价：¥1,890.00  [刷新价格]                     │ │
+│  │                                                         │ │
+│  │ ○ 指定价格卖出                                          │ │
+│  │   卖出价格：¥ [________]                                │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  平仓数量                                                    │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │ ○ 全部平仓（100股）                                     │ │
+│  │ ● 部分平仓                                              │ │
+│  │   ┌─────────────────────────────────────────────────┐ │ │
+│  │   │ 数量：[____50____] 股                           │ │ │
+│  │   │ 比例：═══════════●═══════════  50%              │ │ │
+│  │   │ 剩余：50股                                       │ │ │
+│  │   └─────────────────────────────────────────────────┘ │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  ─────────────────────────────────────────────────────────  │
+│                                                             │
+│  盈亏预览                                                    │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │                                                         │ │
+│  │   本次盈亏：  +¥4,500.00  (+5.00%)                      │ │
+│  │   平仓金额：  ¥94,500.00                                │ │
+│  │   剩余持仓：  50股（占比需重新分配）                     │ │
+│  │                                                         │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  ⚠️ 部分平仓后，剩余持仓的仓位占比需要重新分配。             │
+│                                                             │
+│                              [取消]  [确认平仓]              │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 指定价格平仓弹窗
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 平仓持仓                                              [×]  │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  持仓信息                                                    │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │ 600519 - 贵州茅台                                      │ │
+│  │ 建仓价格：¥1,800.00  │  持仓数量：100股  │  占比：50%  │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  平仓方式                                                    │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │ ○ 按当前收盘价卖出                                      │ │
+│  │   当前收盘价：¥1,890.00                                 │ │
+│  │                                                         │ │
+│  │ ● 指定价格卖出                                          │ │
+│  │   卖出价格：¥ [__1850.00__]                             │ │
+│  │   ┌─────────────────────────────────────────────────┐ │ │
+│  │   │ 提示：指定价格可能与实际成交价格存在差异         │ │ │
+│  │   └─────────────────────────────────────────────────┘ │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  平仓数量                                                    │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │ ● 全部平仓（100股）                                     │ │
+│  │ ○ 部分平仓                                              │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  ─────────────────────────────────────────────────────────  │
+│                                                             │
+│  盈亏预览                                                    │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │                                                         │ │
+│  │   预计盈亏：  +¥5,000.00  (+2.78%)                      │ │
+│  │   平仓金额：  ¥185,000.00                               │ │
+│  │   交易费用：  ¥185.00（估算）                           │ │
+│  │                                                         │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  ⚠️ 平仓操作不可撤销，请确认信息无误。                       │
+│                                                             │
+│                              [取消]  [确认平仓]              │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 平仓弹窗组件
+
+```tsx
+interface ClosePositionModalProps {
+  holding: Holding;
+  currentPrice: number;
+  onClose: () => void;
+  onConfirm: (params: ClosePositionParams) => void;
+}
+
+const ClosePositionModal: React.FC<ClosePositionModalProps> = ({
+  holding,
+  currentPrice,
+  onClose,
+  onConfirm,
+}) => {
+  const [priceType, setPriceType] = useState<'current' | 'specified'>('current');
+  const [specifiedPrice, setSpecifiedPrice] = useState<number>(0);
+  const [quantityType, setQuantityType] = useState<'all' | 'partial'>('all');
+  const [quantity, setQuantity] = useState<number>(0);
+  const [isLoading, setIsLoading] = useState(false);
+  
+  const actualPrice = priceType === 'current' ? currentPrice : specifiedPrice;
+  const actualQuantity = quantityType === 'all' ? holding.shares : quantity;
+  
+  const pnlAmount = (actualPrice - holding.entry_price) * actualQuantity;
+  const pnlPct = ((actualPrice - holding.entry_price) / holding.entry_price) * 100;
+  
+  return (
+    <div className="modal-overlay">
+      <div className="modal-content">
+        <div className="modal-header">
+          <h3>平仓持仓</h3>
+          <button onClick={onClose}>×</button>
+        </div>
+        
+        <div className="modal-body">
+          {/* 持仓信息 */}
+          <div className="holding-info glass-card">
+            <div className="code-name">
+              <span className="code">{holding.code}</span>
+              <span className="name">{holding.name}</span>
+            </div>
+            <div className="details">
+              <span>建仓价格：¥{holding.entry_price.toFixed(2)}</span>
+              <span>持仓数量：{holding.shares}股</span>
+              <span>占比：{holding.weight}%</span>
+            </div>
+          </div>
+          
+          {/* 平仓方式 */}
+          <div className="price-type-section">
+            <label className="section-label">平仓方式</label>
+            <div className="radio-group">
+              <label className="radio-option">
+                <input
+                  type="radio"
+                  checked={priceType === 'current'}
+                  onChange={() => setPriceType('current')}
+                />
+                <span className="radio-label">按当前收盘价卖出（推荐）</span>
+              </label>
+              {priceType === 'current' && (
+                <div className="current-price-display">
+                  <span>当前收盘价：¥{currentPrice.toFixed(2)}</span>
+                  <button className="btn-refresh" onClick={refreshPrice}>
+                    刷新价格
+                  </button>
+                </div>
+              )}
+              
+              <label className="radio-option">
+                <input
+                  type="radio"
+                  checked={priceType === 'specified'}
+                  onChange={() => setPriceType('specified')}
+                />
+                <span className="radio-label">指定价格卖出</span>
+              </label>
+              {priceType === 'specified' && (
+                <div className="price-input-wrapper">
+                  <span>卖出价格：¥</span>
+                  <input
+                    type="number"
+                    value={specifiedPrice}
+                    onChange={(e) => setSpecifiedPrice(parseFloat(e.target.value))}
+                    className="input-terminal"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+          
+          {/* 平仓数量 */}
+          <div className="quantity-section">
+            <label className="section-label">平仓数量</label>
+            <div className="radio-group">
+              <label className="radio-option">
+                <input
+                  type="radio"
+                  checked={quantityType === 'all'}
+                  onChange={() => setQuantityType('all')}
+                />
+                <span className="radio-label">全部平仓（{holding.shares}股）</span>
+              </label>
+              
+              <label className="radio-option">
+                <input
+                  type="radio"
+                  checked={quantityType === 'partial'}
+                  onChange={() => setQuantityType('partial')}
+                />
+                <span className="radio-label">部分平仓</span>
+              </label>
+              {quantityType === 'partial' && (
+                <div className="partial-input-wrapper">
+                  <div className="quantity-input">
+                    <span>数量：</span>
+                    <input
+                      type="number"
+                      value={quantity}
+                      onChange={(e) => setQuantity(parseFloat(e.target.value))}
+                      max={holding.shares}
+                      className="input-terminal"
+                    />
+                    <span>股</span>
+                  </div>
+                  <div className="ratio-slider">
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={(quantity / holding.shares) * 100}
+                      onChange={(e) => setQuantity(holding.shares * parseFloat(e.target.value) / 100)}
+                    />
+                    <span>{((quantity / holding.shares) * 100).toFixed(0)}%</span>
+                  </div>
+                  <div className="remaining">
+                    剩余：{holding.shares - quantity}股
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          
+          {/* 盈亏预览 */}
+          <div className="pnl-preview glass-card">
+            <div className="pnl-row">
+              <span>预计盈亏：</span>
+              <span className={pnlAmount >= 0 ? 'text-success' : 'text-danger'}>
+                {pnlAmount >= 0 ? '+' : ''}¥{pnlAmount.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+              </span>
+            </div>
+            <div className="pnl-row">
+              <span>平仓金额：</span>
+              <span>¥{(actualPrice * actualQuantity).toFixed(2)}</span>
+            </div>
+            {quantityType === 'partial' && (
+              <div className="pnl-row warning">
+                <span>剩余持仓：</span>
+                <span>{holding.shares - quantity}股（占比需重新分配）</span>
+              </div>
+            )}
+          </div>
+          
+          {/* 警告提示 */}
+          <div className="warning-text">
+            ⚠️ 平仓操作不可撤销，请确认信息无误。
+          </div>
+        </div>
+        
+        <div className="modal-footer">
+          <button className="btn-secondary" onClick={onClose}>取消</button>
+          <button 
+            className="btn-danger" 
+            onClick={() => onConfirm({ priceType, specifiedPrice, quantityType, quantity })}
+            disabled={isLoading}
+          >
+            {isLoading ? '处理中...' : '确认平仓'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+```
+
+#### 平仓弹窗样式
+
+```css
+.close-position-modal .holding-info {
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.close-position-modal .holding-info .code {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--color-cyan);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.close-position-modal .holding-info .name {
+  color: var(--text-primary);
+  margin-left: 8px;
+}
+
+.close-position-modal .holding-info .details {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.close-position-modal .radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.close-position-modal .radio-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.close-position-modal .radio-option:hover {
+  background: var(--bg-hover);
+}
+
+.close-position-modal .radio-option input[type="radio"] {
+  accent-color: var(--color-cyan);
+}
+
+.close-position-modal .current-price-display {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: 24px;
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.close-position-modal .btn-refresh {
+  font-size: 12px;
+  color: var(--color-cyan);
+  background: transparent;
+  border: 1px solid var(--color-cyan);
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.close-position-modal .partial-input-wrapper {
+  margin-left: 24px;
+  padding: 12px;
+  background: var(--bg-elevated);
+  border-radius: 8px;
+}
+
+.close-position-modal .ratio-slider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.close-position-modal .ratio-slider input[type="range"] {
+  flex: 1;
+  accent-color: var(--color-cyan);
+}
+
+.close-position-modal .pnl-preview {
+  padding: 16px;
+  margin-top: 16px;
+  border: 1px solid var(--border-default);
+}
+
+.close-position-modal .pnl-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.close-position-modal .pnl-row.warning {
+  color: var(--color-warning);
+}
+
+.close-position-modal .warning-text {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: rgba(255, 170, 0, 0.1);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--color-warning);
+}
+
+.close-position-modal .btn-danger {
+  background: linear-gradient(135deg, #ff4466, #cc3355);
+  color: white;
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.close-position-modal .btn-danger:hover {
+  box-shadow: 0 0 20px rgba(255, 68, 102, 0.4);
+}
+
+.close-position-modal .btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 ```
 
 ---
@@ -889,6 +1438,194 @@ const Toast: React.FC<ToastProps> = ({ type, message, action }) => {
     </div>
   );
 };
+```
+
+### 5.4 平仓状态反馈
+
+#### 平仓成功通知
+
+```tsx
+const ClosePositionSuccessToast: React.FC<{
+  code: string;
+  name: string;
+  pnl: number;
+  onClose: () => void;
+}> = ({ code, name, pnl, onClose }) => (
+  <div className="toast toast-success">
+    <div className="toast-icon">✓</div>
+    <div className="toast-content">
+      <div className="toast-title">平仓成功</div>
+      <div className="toast-message">
+        {code} {name} 已平仓
+        <span className={pnl >= 0 ? 'text-success' : 'text-danger'}>
+          {pnl >= 0 ? '+' : ''}¥{pnl.toFixed(2)}
+        </span>
+      </div>
+    </div>
+    <button className="toast-close" onClick={onClose}>×</button>
+  </div>
+);
+```
+
+#### 平仓失败通知
+
+```tsx
+const ClosePositionErrorToast: React.FC<{
+  code: string;
+  reason: string;
+  onRetry?: () => void;
+  onClose: () => void;
+}> = ({ code, reason, onRetry, onClose }) => (
+  <div className="toast toast-error">
+    <div className="toast-icon">✕</div>
+    <div className="toast-content">
+      <div className="toast-title">平仓失败</div>
+      <div className="toast-message">
+        {code} 平仓失败：{reason}
+      </div>
+    </div>
+    {onRetry && (
+      <button className="toast-action" onClick={onRetry}>重试</button>
+    )}
+    <button className="toast-close" onClick={onClose}>×</button>
+  </div>
+);
+```
+
+#### 部分平仓成功通知
+
+```tsx
+const PartialCloseSuccessToast: React.FC<{
+  code: string;
+  closedQuantity: number;
+  remainingQuantity: number;
+  pnl: number;
+  needsRebalance: boolean;
+  onRebalance?: () => void;
+  onClose: () => void;
+}> = ({ code, closedQuantity, remainingQuantity, pnl, needsRebalance, onRebalance, onClose }) => (
+  <div className="toast toast-success">
+    <div className="toast-icon">✓</div>
+    <div className="toast-content">
+      <div className="toast-title">部分平仓成功</div>
+      <div className="toast-message">
+        {code} 已平仓 {closedQuantity}股，剩余 {remainingQuantity}股
+        <span className={pnl >= 0 ? 'text-success' : 'text-danger'}>
+          {pnl >= 0 ? '+' : ''}¥{pnl.toFixed(2)}
+        </span>
+      </div>
+      {needsRebalance && (
+        <div className="toast-warning">
+          ⚠️ 剩余持仓仓位占比需重新分配
+        </div>
+      )}
+    </div>
+    {needsRebalance && onRebalance && (
+      <button className="toast-action" onClick={onRebalance}>重新平衡</button>
+    )}
+    <button className="toast-close" onClick={onClose}>×</button>
+  </div>
+);
+```
+
+#### 平仓状态反馈样式
+
+```css
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid;
+  backdrop-filter: blur(8px);
+  animation: slide-in-right 0.3s ease-out;
+}
+
+.toast-success {
+  border-color: rgba(0, 255, 136, 0.3);
+  background: rgba(0, 255, 136, 0.1);
+}
+
+.toast-error {
+  border-color: rgba(255, 68, 102, 0.3);
+  background: rgba(255, 68, 102, 0.1);
+}
+
+.toast-icon {
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.toast-success .toast-icon {
+  color: var(--color-success);
+}
+
+.toast-error .toast-icon {
+  color: var(--color-danger);
+}
+
+.toast-content {
+  flex: 1;
+}
+
+.toast-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.toast-message {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.toast-warning {
+  font-size: 11px;
+  color: var(--color-warning);
+  margin-top: 4px;
+}
+
+.toast-action {
+  font-size: 12px;
+  color: var(--color-cyan);
+  background: transparent;
+  border: 1px solid var(--color-cyan);
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.toast-action:hover {
+  background: rgba(0, 212, 255, 0.1);
+}
+
+.toast-close {
+  font-size: 18px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.toast-close:hover {
+  color: var(--text-primary);
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
 ```
 
 ---

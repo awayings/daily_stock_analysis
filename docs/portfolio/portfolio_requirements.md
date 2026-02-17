@@ -92,8 +92,26 @@
 |-----|------|
 | **优先级** | P0（关键） |
 | **描述** | 用户能够修改组合信息和持仓 |
-| **验收标准** | 1. 用户可修改组合名称和描述<br>2. 用户可新增持仓<br>3. 用户可移除已有持仓<br>4. 用户可修改建仓价格和仓位占比<br>5. 系统保存前验证变更 |
+| **验收标准** | 1. 用户可修改组合名称和描述<br>2. 用户可新增持仓<br>3. 用户可平仓已有持仓<br>4. 用户可修改建仓价格和仓位占比<br>5. 系统保存前验证变更 |
 | **依赖** | FR-PM-001 |
+
+#### FR-PM-005-1：平仓持仓
+
+| 属性 | 描述 |
+|-----|------|
+| **优先级** | P0（关键） |
+| **描述** | 用户能够对持仓进行平仓操作 |
+| **验收标准** | 1. 用户可选择平仓方式：指定价格卖出或按当前收盘价卖出<br>2. 用户可选择平仓数量：全部平仓或部分平仓<br>3. 系统实时计算并显示盈亏预览<br>4. 平仓前需确认价格、数量信息<br>5. 平仓成功后更新持仓状态和组合统计 |
+| **依赖** | FR-PM-005 |
+
+#### FR-PM-005-2：部分平仓
+
+| 属性 | 描述 |
+|-----|------|
+| **优先级** | P1（高） |
+| **描述** | 用户能够对持仓进行部分平仓操作 |
+| **验收标准** | 1. 用户可输入平仓数量或比例<br>2. 系统验证平仓数量不超过持仓数量<br>3. 平仓后更新剩余持仓数量<br>4. 提示用户重新平衡仓位占比 |
+| **依赖** | FR-PM-005-1 |
 
 #### FR-PM-006：软删除组合
 
@@ -121,7 +139,7 @@
 |-----|------|
 | **优先级** | P0（关键） |
 | **描述** | 系统能够计算每个持仓和组合总体的当前盈亏 |
-| **验收标准** | 1. 盈亏% = (当前价格 - 建仓价格) / 建仓价格 * 100<br>2. 加权盈亏 = 盈亏% * 仓位占比 / 100<br>3. 总盈亏 = Σ(加权盈亏)<br>4. 价格刷新时自动更新计算 |
+| **验收标准** | 1. 浮动盈亏% = (当前价格 - 建仓价格) / 建仓价格 * 100<br>2. 加权盈亏 = 浮动盈亏% * 仓位占比 / 100<br>3. 组合浮动盈亏 = Σ(活跃持仓加权盈亏)<br>4. 已实现盈亏 = Σ(已平仓持仓的(平仓价-建仓价)*数量)<br>5. 总盈亏 = 浮动盈亏 + 累计已实现盈亏<br>6. 价格刷新时自动更新计算 |
 | **依赖** | 股票价格数据 |
 
 #### FR-PC-002：每周自动计算
@@ -130,7 +148,7 @@
 |-----|------|
 | **优先级** | P0（关键） |
 | **描述** | 系统能够每周自动计算并记录组合收益 |
-| **验收标准** | 1. 每周五18:00执行（可配置）<br>2. 处理所有活跃组合<br>3. 为每个组合创建历史快照<br>4. 记录各持仓独立收益<br>5. 失败时优雅处理并重试 |
+| **验收标准** | 1. 每周五18:00执行（可配置）<br>2. 处理所有活跃组合<br>3. 计算浮动盈亏（活跃持仓）<br>4. 累加本周平仓收益（已实现盈亏）<br>5. 计算总盈亏 = 浮动盈亏 + 累计已实现盈亏<br>6. 为每个组合创建历史快照<br>7. 记录各持仓独立收益<br>8. 失败时优雅处理并重试 |
 | **依赖** | 调度器、FR-PC-001 |
 
 #### FR-PC-003：手动触发计算
@@ -300,9 +318,12 @@ erDiagram
         DECIMAL entry_price "建仓价格"
         DECIMAL weight "仓位占比（0-100）"
         DECIMAL shares "股数（计算值）"
-        BOOLEAN is_removed "移除标记"
+        BOOLEAN is_closed "平仓标记"
+        DECIMAL close_price "平仓价格"
+        DECIMAL close_quantity "平仓数量"
+        VARCHAR close_type "平仓类型：full/partial"
         DATETIME added_at "添加时间"
-        DATETIME removed_at "移除时间"
+        DATETIME closed_at "平仓时间"
         DATETIME updated_at "更新时间"
     }
     
@@ -311,9 +332,14 @@ erDiagram
         BIGINT portfolio_id FK "组合引用"
         DATE snapshot_date "快照日期"
         DECIMAL total_value "组合总市值"
+        DECIMAL unrealized_pnl_pct "浮动盈亏百分比"
+        DECIMAL unrealized_pnl_amount "浮动盈亏金额"
+        DECIMAL realized_pnl_amount "本周已实现盈亏"
+        DECIMAL cumulative_realized_pnl "累计已实现盈亏"
         DECIMAL total_pnl_pct "总盈亏百分比"
         DECIMAL total_pnl_amount "总盈亏金额"
-        INTEGER holdings_count "持仓数量"
+        INTEGER active_holdings_count "活跃持仓数量"
+        INTEGER closed_holdings_count "本周平仓数量"
         VARCHAR calculation_status "状态：success/partial/failed"
         TEXT error_message "错误详情"
         DATETIME calculated_at "计算时间"
@@ -369,15 +395,19 @@ erDiagram
 | entry_price | DECIMAL(18,4) | 非空 | 建仓价格 |
 | weight | DECIMAL(5,2) | 非空 | 仓位占比（0-100） |
 | shares | DECIMAL(18,4) | 可空 | 股数 |
-| is_removed | BOOLEAN | 默认FALSE | 移除标记 |
+| is_closed | BOOLEAN | 默认FALSE | 平仓标记 |
+| close_price | DECIMAL(18,4) | 可空 | 平仓价格 |
+| close_quantity | DECIMAL(18,4) | 可空 | 平仓数量 |
+| close_type | VARCHAR(20) | 可空 | 平仓类型：full/partial |
 | added_at | DATETIME | 默认当前时间 | 添加时间 |
-| removed_at | DATETIME | 可空 | 移除时间 |
+| closed_at | DATETIME | 可空 | 平仓时间 |
 | updated_at | DATETIME | 更新时自动更新 | 更新时间 |
 
 **索引：**
 - `ix_holdings_portfolio` ON (portfolio_id)
 - `ix_holdings_code` ON (code)
-- `uix_portfolio_code` UNIQUE ON (portfolio_id, code) WHERE is_removed = FALSE
+- `ix_holdings_closed` ON (portfolio_id, is_closed)
+- `uix_portfolio_code` UNIQUE ON (portfolio_id, code) WHERE is_closed = FALSE
 
 **Doris UNIQUE KEY：** (portfolio_id, code)  
 **Doris DISTRIBUTED BY：** HASH(portfolio_id)
@@ -392,9 +422,14 @@ erDiagram
 | portfolio_id | BIGINT | 非空，外键 | 组合引用 |
 | snapshot_date | DATE | 非空 | 快照日期 |
 | total_value | DECIMAL(18,4) | 可空 | 组合总市值 |
+| unrealized_pnl_pct | DECIMAL(10,4) | 可空 | 浮动盈亏百分比 |
+| unrealized_pnl_amount | DECIMAL(18,4) | 可空 | 浮动盈亏金额 |
+| realized_pnl_amount | DECIMAL(18,4) | 默认0 | 本周已实现盈亏金额 |
+| cumulative_realized_pnl | DECIMAL(18,4) | 默认0 | 累计已实现盈亏金额 |
 | total_pnl_pct | DECIMAL(10,4) | 可空 | 总盈亏百分比 |
 | total_pnl_amount | DECIMAL(18,4) | 可空 | 总盈亏金额 |
-| holdings_count | INTEGER | 默认0 | 持仓数量 |
+| active_holdings_count | INTEGER | 默认0 | 活跃持仓数量 |
+| closed_holdings_count | INTEGER | 默认0 | 本周平仓持仓数量 |
 | calculation_status | VARCHAR(20) | 默认'pending' | 状态 |
 | error_message | TEXT | 可空 | 错误详情 |
 | calculated_at | DATETIME | 默认当前时间 | 计算时间 |
@@ -443,6 +478,11 @@ erDiagram
 | holding.entry_price | 必填，正数 | "建仓价格必须为正数" |
 | holding.weight | 0.01 - 100.00 | "仓位占比必须在0.01到100之间" |
 | holding.weight（总和） | 必须等于100% | "仓位占比总和必须等于100%" |
+| close.price_type | current 或 specified | "价格类型无效" |
+| close.specified_price | price_type=specified时必填，正数 | "平仓价格必须为正数" |
+| close.quantity_type | all 或 partial | "数量类型无效" |
+| close.quantity | quantity_type=partial时必填，正数 | "平仓数量必须为正数" |
+| close.quantity | 不能超过持仓数量 | "平仓数量不能超过当前持仓数量" |
 
 ---
 
@@ -460,7 +500,7 @@ erDiagram
 | POST | /api/v1/portfolios/{id}/restore | 恢复已删除组合 |
 | POST | /api/v1/portfolios/{id}/holdings | 添加持仓 |
 | PUT | /api/v1/portfolios/{id}/holdings/{holding_id} | 更新持仓 |
-| DELETE | /api/v1/portfolios/{id}/holdings/{holding_id} | 移除持仓 |
+| POST | /api/v1/portfolios/{id}/holdings/{holding_id}/closePosition | 平仓持仓 |
 | POST | /api/v1/portfolios/{id}/holdings/batch | 批量添加持仓 |
 | POST | /api/v1/portfolios/{id}/holdings/rebalance | 平均分配仓位 |
 | POST | /api/v1/portfolios/{id}/calculate | 触发计算 |
@@ -741,20 +781,94 @@ erDiagram
 
 ---
 
-#### 5.2.9 移除持仓
+#### 5.2.9 平仓持仓
 
-**DELETE** `/api/v1/portfolios/{id}/holdings/{holding_id}`
+**POST** `/api/v1/portfolios/{id}/holdings/{holding_id}/closePosition`
+
+**请求体：**
+
+```json
+{
+  "price_type": "current",
+  "specified_price": null,
+  "quantity_type": "all",
+  "quantity": null,
+  "ratio": null
+}
+```
+
+**请求参数说明：**
+
+| 参数 | 类型 | 必填 | 描述 |
+|-----|------|-----|------|
+| price_type | string | 是 | 价格类型：current（当前收盘价）/ specified（指定价格） |
+| specified_price | number | 否 | 指定价格，price_type=specified时必填，正数 |
+| quantity_type | string | 是 | 数量类型：all（全部）/ partial（部分） |
+| quantity | number | 否 | 平仓数量，quantity_type=partial时必填，正数 |
+| ratio | number | 否 | 平仓比例（0-100），quantity_type=partial时可选 |
 
 **响应（200 OK）：**
 
 ```json
 {
   "id": 1,
+  "portfolio_id": 1,
   "code": "AAPL",
-  "is_removed": true,
-  "removed_at": "2026-02-17T14:00:00Z"
+  "name": "苹果公司",
+  "entry_price": 180.00,
+  "close_price": 185.00,
+  "close_quantity": 100.00,
+  "close_type": "full",
+  "is_closed": true,
+  "closed_at": "2026-02-17T14:00:00Z",
+  "pnl": {
+    "amount": 500.00,
+    "percentage": 2.78,
+    "realized": true
+  },
+  "remaining": {
+    "shares": 0,
+    "weight": 0
+  },
+  "transaction_fee": 5.00,
+  "settlement_date": "2026-02-19"
 }
 ```
+
+**部分平仓响应示例：**
+
+```json
+{
+  "id": 1,
+  "code": "AAPL",
+  "close_price": 185.00,
+  "close_quantity": 50.00,
+  "close_type": "partial",
+  "is_closed": false,
+  "closed_at": "2026-02-17T14:00:00Z",
+  "pnl": {
+    "amount": 250.00,
+    "percentage": 2.78,
+    "realized": true
+  },
+  "remaining": {
+    "shares": 50.00,
+    "weight": 10.00
+  },
+  "weight_rebalance_required": true
+}
+```
+
+**错误响应：**
+
+| 状态码 | 错误代码 | 描述 |
+|-------|---------|------|
+| 400 | CLOSE_001 | 平仓价格必须为正数 |
+| 400 | CLOSE_002 | 平仓数量不能超过当前持仓数量 |
+| 400 | CLOSE_003 | 平仓数量必须大于0 |
+| 400 | CLOSE_004 | 无法获取当前收盘价 |
+| 404 | HOLDING_NOT_FOUND | 持仓不存在 |
+| 409 | HOLDING_ALREADY_CLOSED | 持仓已平仓 |
 
 ---
 
@@ -879,9 +993,14 @@ erDiagram
       "id": 1,
       "snapshot_date": "2026-02-14",
       "total_value": 102500.00,
-      "total_pnl_pct": 2.50,
-      "total_pnl_amount": 2500.00,
-      "holdings_count": 5,
+      "unrealized_pnl_pct": 2.00,
+      "unrealized_pnl_amount": 2000.00,
+      "realized_pnl_amount": 500.00,
+      "cumulative_realized_pnl": 1500.00,
+      "total_pnl_pct": 3.50,
+      "total_pnl_amount": 3500.00,
+      "active_holdings_count": 5,
+      "closed_holdings_count": 2,
       "calculation_status": "success",
       "calculated_at": "2026-02-14T18:00:00Z",
       "holdings": [
@@ -893,6 +1012,17 @@ erDiagram
           "weight": 50.00,
           "pnl_pct": 2.50,
           "weighted_pnl": 1.25
+        }
+      ],
+      "closed_positions": [
+        {
+          "code": "BABA",
+          "name": "阿里巴巴",
+          "entry_price": 85.00,
+          "close_price": 90.00,
+          "close_quantity": 100,
+          "realized_pnl": 500.00,
+          "closed_at": "2026-02-12T10:30:00Z"
         }
       ]
     }
@@ -931,7 +1061,11 @@ erDiagram
     {
       "date": "2026-02-14",
       "total_value": 102500.00,
-      "total_pnl_pct": 2.50,
+      "unrealized_pnl_pct": 2.00,
+      "unrealized_pnl_amount": 2000.00,
+      "realized_pnl_amount": 500.00,
+      "cumulative_realized_pnl": 1500.00,
+      "total_pnl_pct": 3.50,
       "holdings": {
         "600519": {
           "pnl_pct": 2.50,
@@ -941,7 +1075,9 @@ erDiagram
     }
   ],
   "statistics": {
-    "total_return_pct": 2.50,
+    "total_return_pct": 3.50,
+    "unrealized_return_pct": 2.00,
+    "realized_return_pct": 1.50,
     "max_drawdown_pct": -1.20,
     "best_day": {
       "date": "2026-02-10",
@@ -1013,7 +1149,9 @@ erDiagram
 | BR-H-002 | 仓位占比总和必须等于100% | 保存时验证 |
 | BR-H-003 | 同一股票不能重复添加 | (portfolio_id, code)唯一约束 |
 | BR-H-004 | 建仓价格必须为正数 | 输入验证 |
-| BR-H-005 | 移除持仓使用软删除 | 设置is_removed=true |
+| BR-H-005 | 平仓价格必须为正数 | 输入验证 |
+| BR-H-006 | 平仓数量不能超过持仓数量 | 平仓前验证 |
+| BR-H-007 | 部分平仓后需检查仓位占比 | 平仓后提示重新平衡 |
 
 ### 6.3 计算规则
 
@@ -1024,6 +1162,35 @@ erDiagram
 | BR-C-003 | 失败计算重试3次 | 带退避的重试逻辑 |
 | BR-C-004 | 历史记录不可修改 | 历史表无更新/删除操作 |
 | BR-C-005 | 每组合每天一个快照 | 唯一约束 |
+| BR-C-006 | 浮动盈亏仅计算活跃持仓 | 过滤is_closed=false |
+| BR-C-007 | 已实现盈亏累加本周平仓 | 查询closed_at在上次计算后 |
+| BR-C-008 | 累计已实现盈亏从上次快照继承 | 读取上一条历史记录 |
+| BR-C-009 | 总盈亏=浮动+已实现 | 计算公式 |
+
+### 6.4 盈亏计算公式
+
+```
+组合盈亏计算规则：
+
+1. 浮动盈亏（未实现盈亏）：
+   - 计算对象：所有活跃持仓（is_closed=false）
+   - 单只持仓盈亏% = (当前价格 - 建仓价格) / 建仓价格 * 100
+   - 加权持仓盈亏 = 单只持仓盈亏% * 仓位占比 / 100
+   - 组合浮动盈亏% = Σ(所有活跃持仓的加权持仓盈亏)
+   - 组合浮动盈亏金额 = 组合浮动盈亏% * 初始资金 / 100
+
+2. 本周已实现盈亏：
+   - 计算对象：本周内平仓的持仓（上次计算后至本次计算前closed_at）
+   - 单笔平仓盈亏 = (平仓价格 - 建仓价格) * 平仓数量
+   - 本周已实现盈亏 = Σ(本周所有平仓持仓的平仓盈亏)
+
+3. 累计已实现盈亏：
+   - 累计已实现盈亏 = 上次快照的累计已实现盈亏 + 本周已实现盈亏
+
+4. 组合总盈亏：
+   - 总盈亏金额 = 浮动盈亏金额 + 累计已实现盈亏
+   - 总盈亏% = 总盈亏金额 / 初始资金 * 100
+```
 
 ---
 
@@ -1065,7 +1232,16 @@ erDiagram
 | 持仓 | 组合中的单只股票头寸 |
 | 建仓价格 | 股票加入组合时的价格 |
 | 仓位占比 | 持仓在组合中的百分比配置 |
+| 浮动盈亏 | 活跃持仓的未实现盈亏，随市场价格变动 |
+| 已实现盈亏 | 已平仓持仓的实际盈亏，不再随市场变动 |
+| 总盈亏 | 浮动盈亏与累计已实现盈亏的总和 |
 | 盈亏 | 盈利与亏损，以建仓价格为基准计算的百分比变化 |
+| 平仓 | 卖出持仓股票，结束该笔投资 |
+| 全部平仓 | 卖出某持仓的全部数量 |
+| 部分平仓 | 卖出某持仓的部分数量，剩余部分继续持有 |
+| 平仓价格 | 平仓时的卖出价格 |
+| 指定价格平仓 | 用户手动输入卖出价格的平仓方式 |
+| 收盘价平仓 | 按当前最新收盘价自动平仓的方式 |
 | 软删除 | 将记录标记为已删除但不从数据库中移除 |
 | 快照 | 特定时间点的组合状态和收益记录 |
 | 加权盈亏 | 持仓盈亏对组合总盈亏的贡献度 |
