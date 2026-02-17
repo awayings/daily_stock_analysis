@@ -34,6 +34,7 @@ from sqlalchemy import (
     Index,
     UniqueConstraint,
     Text,
+    Numeric,
     select,
     and_,
     desc,
@@ -380,7 +381,233 @@ class BacktestSummary(SQLITE_BASE):
     doris_distributed_by = None
 
 
-ALL_MODELS = [StockDaily, NewsIntel, AnalysisHistory, BacktestResult, BacktestSummary]
+class Portfolio(SQLITE_BASE):
+    """
+    投资组合模型
+
+    存储投资组合的基本信息
+
+    Doris UNIQUE KEY 模型：
+    - 主键: id
+    - 分布: HASH(id)
+    """
+    __tablename__ = 'portfolios'
+
+    __table_args__ = (
+        Index('ix_portfolios_created', 'created_at'),
+        Index('ix_portfolios_deleted', 'is_deleted', 'deleted_at'),
+        {'extend_existing': True},
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text)
+    initial_capital = Column(Numeric(18, 4))
+    currency = Column(String(10), default='CNY')
+    is_deleted = Column(Integer, default=0)
+    deleted_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    doris_unique_key = ('id',)
+    doris_distributed_by = None
+
+    def __repr__(self):
+        return f"<Portfolio(id={self.id}, name={self.name})>"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'initial_capital': float(self.initial_capital) if self.initial_capital else None,
+            'currency': self.currency,
+            'is_deleted': self.is_deleted,
+            'deleted_at': self.deleted_at.isoformat() if self.deleted_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class PortfolioHolding(SQLITE_BASE):
+    """
+    持仓模型
+
+    存储投资组合中的股票持仓信息
+
+    Doris UNIQUE KEY 模型：
+    - 主键: id
+    - 分布: HASH(portfolio_id)
+    """
+    __tablename__ = 'portfolio_holdings'
+
+    __table_args__ = (
+        Index('ix_holdings_portfolio', 'portfolio_id'),
+        Index('ix_holdings_code', 'code'),
+        Index('ix_holdings_closed', 'portfolio_id', 'is_closed'),
+        {'extend_existing': True},
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    portfolio_id = Column(BigInteger, ForeignKey('portfolios.id'), nullable=False)
+    code = Column(String(20), nullable=False)
+    name = Column(String(100))
+    entry_price = Column(Numeric(18, 4), nullable=False)
+    weight = Column(Numeric(5, 2), nullable=False)
+    shares = Column(Numeric(18, 4))
+    is_closed = Column(Integer, default=0)
+    close_price = Column(Numeric(18, 4))
+    close_quantity = Column(Numeric(18, 4))
+    close_type = Column(String(20))
+    added_at = Column(DateTime, default=datetime.now)
+    closed_at = Column(DateTime)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    doris_unique_key = ('id',)
+    doris_distributed_by = None
+
+    def __repr__(self):
+        return f"<PortfolioHolding(id={self.id}, code={self.code}, weight={self.weight})>"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'portfolio_id': self.portfolio_id,
+            'code': self.code,
+            'name': self.name,
+            'entry_price': float(self.entry_price) if self.entry_price else None,
+            'weight': float(self.weight) if self.weight else None,
+            'shares': float(self.shares) if self.shares else None,
+            'is_closed': self.is_closed,
+            'close_price': float(self.close_price) if self.close_price else None,
+            'close_quantity': float(self.close_quantity) if self.close_quantity else None,
+            'close_type': self.close_type,
+            'added_at': self.added_at.isoformat() if self.added_at else None,
+            'closed_at': self.closed_at.isoformat() if self.closed_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class PortfolioHistory(SQLITE_BASE):
+    """
+    历史快照模型
+
+    存储每周计算生成的组合收益快照
+
+    Doris UNIQUE KEY 模型：
+    - 主键: portfolio_id, snapshot_date
+    - 分布: HASH(portfolio_id)
+    """
+    __tablename__ = 'portfolio_history'
+
+    __table_args__ = (
+        Index('ix_history_portfolio_date', 'portfolio_id', 'snapshot_date'),
+        {'extend_existing': True},
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    portfolio_id = Column(BigInteger, ForeignKey('portfolios.id'), nullable=False)
+    snapshot_date = Column(Date, nullable=False)
+    total_value = Column(Numeric(18, 4))
+    unrealized_pnl_pct = Column(Numeric(10, 4))
+    unrealized_pnl_amount = Column(Numeric(18, 4))
+    realized_pnl_amount = Column(Numeric(18, 4), default=0)
+    cumulative_realized_pnl = Column(Numeric(18, 4), default=0)
+    total_pnl_pct = Column(Numeric(10, 4))
+    total_pnl_amount = Column(Numeric(18, 4))
+    active_holdings_count = Column(Integer, default=0)
+    closed_holdings_count = Column(Integer, default=0)
+    calculation_status = Column(String(20), default='pending')
+    error_message = Column(Text)
+    calculated_at = Column(DateTime, default=datetime.now)
+
+    doris_unique_key = ('portfolio_id', 'snapshot_date')
+    doris_distributed_by = None
+
+    def __repr__(self):
+        return f"<PortfolioHistory(id={self.id}, portfolio_id={self.portfolio_id}, snapshot_date={self.snapshot_date})>"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'portfolio_id': self.portfolio_id,
+            'snapshot_date': self.snapshot_date.isoformat() if self.snapshot_date else None,
+            'total_value': float(self.total_value) if self.total_value else None,
+            'unrealized_pnl_pct': float(self.unrealized_pnl_pct) if self.unrealized_pnl_pct else None,
+            'unrealized_pnl_amount': float(self.unrealized_pnl_amount) if self.unrealized_pnl_amount else None,
+            'realized_pnl_amount': float(self.realized_pnl_amount) if self.realized_pnl_amount else 0,
+            'cumulative_realized_pnl': float(self.cumulative_realized_pnl) if self.cumulative_realized_pnl else 0,
+            'total_pnl_pct': float(self.total_pnl_pct) if self.total_pnl_pct else None,
+            'total_pnl_amount': float(self.total_pnl_amount) if self.total_pnl_amount else None,
+            'active_holdings_count': self.active_holdings_count,
+            'closed_holdings_count': self.closed_holdings_count,
+            'calculation_status': self.calculation_status,
+            'error_message': self.error_message,
+            'calculated_at': self.calculated_at.isoformat() if self.calculated_at else None,
+        }
+
+
+class HoldingSnapshot(SQLITE_BASE):
+    """
+    持仓快照模型
+
+    存储每个历史快照时间点的持仓详情
+
+    Doris UNIQUE KEY 模型：
+    - 主键: id
+    - 分布: HASH(history_id)
+    """
+    __tablename__ = 'holding_snapshots'
+
+    __table_args__ = (
+        Index('ix_snapshots_history', 'history_id'),
+        Index('ix_snapshots_code', 'code'),
+        {'extend_existing': True},
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    history_id = Column(BigInteger, ForeignKey('portfolio_history.id'), nullable=False)
+    code = Column(String(20), nullable=False)
+    name = Column(String(100))
+    entry_price = Column(Numeric(18, 4), nullable=False)
+    current_price = Column(Numeric(18, 4))
+    weight = Column(Numeric(5, 2), nullable=False)
+    pnl_pct = Column(Numeric(10, 4))
+    weighted_pnl = Column(Numeric(10, 4))
+    created_at = Column(DateTime, default=datetime.now)
+
+    doris_unique_key = ('id',)
+    doris_distributed_by = None
+
+    def __repr__(self):
+        return f"<HoldingSnapshot(id={self.id}, history_id={self.history_id}, code={self.code})>"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'history_id': self.history_id,
+            'code': self.code,
+            'name': self.name,
+            'entry_price': float(self.entry_price) if self.entry_price else None,
+            'current_price': float(self.current_price) if self.current_price else None,
+            'weight': float(self.weight) if self.weight else None,
+            'pnl_pct': float(self.pnl_pct) if self.pnl_pct else None,
+            'weighted_pnl': float(self.weighted_pnl) if self.weighted_pnl else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+ALL_MODELS = [
+    StockDaily,
+    NewsIntel,
+    AnalysisHistory,
+    BacktestResult,
+    BacktestSummary,
+    Portfolio,
+    PortfolioHolding,
+    PortfolioHistory,
+    HoldingSnapshot,
+]
 
 
 class DatabaseManager:
