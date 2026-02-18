@@ -236,6 +236,7 @@ class PerformanceDataPoint(BaseModel):
     realized_pnl_amount: float = 0
     cumulative_realized_pnl: float = 0
     total_pnl_pct: Optional[float] = None
+    holdings: Optional[Dict[str, Dict[str, float]]] = None
 
 
 class PerformanceStatistics(BaseModel):

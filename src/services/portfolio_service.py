@@ -544,6 +544,14 @@ class PortfolioService:
 
         data_points = []
         for h in histories:
+            snapshots = self.repo.get_holding_snapshots(h.id)
+            holdings_data = {}
+            for snapshot in snapshots:
+                holdings_data[snapshot.code] = {
+                    'pnl_pct': float(snapshot.pnl_pct) if snapshot.pnl_pct else 0,
+                    'weighted_pnl': float(snapshot.weighted_pnl) if snapshot.weighted_pnl else 0,
+                }
+
             data_points.append({
                 'date': h.snapshot_date.isoformat() if h.snapshot_date else None,
                 'total_value': float(h.total_value) if h.total_value else None,
@@ -552,6 +560,7 @@ class PortfolioService:
                 'realized_pnl_amount': float(h.realized_pnl_amount) if h.realized_pnl_amount else 0,
                 'cumulative_realized_pnl': float(h.cumulative_realized_pnl) if h.cumulative_realized_pnl else 0,
                 'total_pnl_pct': float(h.total_pnl_pct) if h.total_pnl_pct else None,
+                'holdings': holdings_data,
             })
 
         data_points.reverse()
@@ -576,8 +585,8 @@ class PortfolioService:
             daily_returns = []
             max_value = total_value_start
             max_drawdown_pct = 0
-            best_day = {'date': '', 'pnl_pct': float('-inf')}
-            worst_day = {'date': '', 'pnl_pct': float('inf')}
+            best_day = {'date': '', 'pnlPct': float('-inf')}
+            worst_day = {'date': '', 'pnlPct': float('inf')}
 
             for i in range(1, len(data_points)):
                 prev_value = data_points[i-1].get('total_value') or total_value_start
@@ -591,10 +600,10 @@ class PortfolioService:
                 if drawdown > max_drawdown_pct:
                     max_drawdown_pct = drawdown
 
-                if daily_return > best_day['pnl_pct']:
-                    best_day = {'date': data_points[i].get('date') or '', 'pnl_pct': daily_return}
-                if daily_return < worst_day['pnl_pct']:
-                    worst_day = {'date': data_points[i].get('date') or '', 'pnl_pct': daily_return}
+                if daily_return > best_day['pnlPct']:
+                    best_day = {'date': data_points[i].get('date') or '', 'pnlPct': daily_return}
+                if daily_return < worst_day['pnlPct']:
+                    worst_day = {'date': data_points[i].get('date') or '', 'pnlPct': daily_return}
 
             statistics = {
                 'total_return_pct': round(total_return_pct, 2),

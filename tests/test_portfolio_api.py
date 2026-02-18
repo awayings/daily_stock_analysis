@@ -503,11 +503,16 @@ class TestPortfolioAPI:
                 {
                     'date': '2026-02-14',
                     'total_value': 102500.0,
-                    'total_pnl_pct': 2.5
+                    'total_pnl_pct': 2.5,
+                    'holdings': {
+                        '600519': {'pnl_pct': 2.5, 'weighted_pnl': 1.25}
+                    }
                 }
             ],
             'statistics': {
-                'total_return_pct': 2.5
+                'total_return_pct': 2.5,
+                'best_day': {'date': '2026-02-10', 'pnlPct': 1.5},
+                'worst_day': {'date': '2026-02-05', 'pnlPct': -0.8}
             }
         }
 
