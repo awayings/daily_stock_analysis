@@ -307,11 +307,15 @@ export const usePortfolioStore = create<PortfolioState>((set, get) => ({
   },
 
   fetchHistory: async (portfolioId, params) => {
+    const isFirstPage = !params?.page || params.page === 1;
     set({ isLoading: true, error: null });
     try {
       const { portfolioApi } = await import('../api/portfolio');
       const response = await portfolioApi.getHistory(portfolioId, params);
-      set({ history: response.items, isLoading: false });
+      set(state => ({
+        history: isFirstPage ? response.items : [...state.history, ...response.items],
+        isLoading: false,
+      }));
     } catch (error: any) {
       set({ error: error.message || '获取历史记录失败', isLoading: false });
     }

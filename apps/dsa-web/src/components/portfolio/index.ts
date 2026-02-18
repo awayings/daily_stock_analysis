@@ -6,3 +6,5 @@ export { ClosePositionModal } from './ClosePositionModal';
 export { DeleteConfirmModal } from './DeleteConfirmModal';
 export { SummaryCard } from './SummaryCard';
 export { PerformanceChart } from './PerformanceChart';
+export { HistoryPanel } from './HistoryPanel';
+export { PerformancePanel } from './PerformancePanel';

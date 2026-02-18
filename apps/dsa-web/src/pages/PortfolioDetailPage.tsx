@@ -2,7 +2,7 @@ import type React from 'react';
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '../components/common';
-import { HoldingTable, AddHoldingModal, ClosePositionModal, SummaryCard } from '../components/portfolio';
+import { HoldingTable, AddHoldingModal, ClosePositionModal, SummaryCard, HistoryPanel, PerformancePanel } from '../components/portfolio';
 import { usePortfolioStore } from '../stores';
 import type { Holding, ClosePositionRequest } from '../api/portfolio';
 
@@ -11,9 +11,13 @@ const PortfolioDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const {
     currentPortfolio,
+    history,
+    performance,
     isLoading,
     error,
     fetchPortfolio,
+    fetchHistory,
+    fetchPerformance,
     addHolding,
     closePosition,
     rebalanceHoldings,
@@ -25,6 +29,8 @@ const PortfolioDetailPage: React.FC = () => {
   const [showAddHolding, setShowAddHolding] = useState(false);
   const [closePositionHolding, setClosePositionHolding] = useState<Holding | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyHasMore, setHistoryHasMore] = useState(true);
 
   const portfolioId = parseInt(id || '0', 10);
 
@@ -34,9 +40,39 @@ const PortfolioDetailPage: React.FC = () => {
     }
   }, [portfolioId, fetchPortfolio]);
 
+  const loadHistory = useCallback(() => {
+    if (portfolioId) {
+      fetchHistory(portfolioId, { page: 1, limit: 20 });
+      setHistoryPage(1);
+      setHistoryHasMore(true);
+    }
+  }, [portfolioId, fetchHistory]);
+
+  const loadHistoryMore = useCallback(() => {
+    if (portfolioId && historyHasMore) {
+      fetchHistory(portfolioId, { page: historyPage + 1, limit: 20 }).then(() => {
+        setHistoryPage(prev => prev + 1);
+      });
+    }
+  }, [portfolioId, historyHasMore, historyPage, fetchHistory]);
+
+  const loadPerformance = useCallback(() => {
+    if (portfolioId) {
+      fetchPerformance(portfolioId, { viewMode: 'portfolio' });
+    }
+  }, [portfolioId, fetchPerformance]);
+
   useEffect(() => {
     loadPortfolio();
   }, [loadPortfolio]);
+
+  useEffect(() => {
+    if (activeTab === 'history') {
+      loadHistory();
+    } else if (activeTab === 'performance') {
+      loadPerformance();
+    }
+  }, [activeTab, loadHistory, loadPerformance]);
 
   useEffect(() => {
     if (error) {
@@ -250,15 +286,20 @@ const PortfolioDetailPage: React.FC = () => {
         )}
 
         {activeTab === 'performance' && (
-          <div className="glass-card p-8 text-center text-muted">
-            收益走势功能开发中...
-          </div>
+          <PerformancePanel
+            performance={performance}
+            isLoading={isLoading}
+            onFetchPerformance={(params) => fetchPerformance(portfolioId, params)}
+          />
         )}
 
         {activeTab === 'history' && (
-          <div className="glass-card p-8 text-center text-muted">
-            历史记录功能开发中...
-          </div>
+          <HistoryPanel
+            items={history}
+            isLoading={isLoading}
+            onLoadMore={loadHistoryMore}
+            hasMore={historyHasMore}
+          />
         )}
       </main>
 
