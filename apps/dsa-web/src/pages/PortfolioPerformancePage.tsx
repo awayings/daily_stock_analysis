@@ -2,7 +2,7 @@ import type React from 'react';
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '../components/common';
-import { SummaryCard } from '../components/portfolio';
+import { SummaryCard, PerformanceChart } from '../components/portfolio';
 import { usePortfolioStore } from '../stores';
 
 const PortfolioPerformancePage: React.FC = () => {
@@ -12,8 +12,10 @@ const PortfolioPerformancePage: React.FC = () => {
     currentPortfolio,
     performance,
     isLoading,
+    error,
     fetchPortfolio,
     fetchPerformance,
+    clearError,
   } = usePortfolioStore();
 
   const [dateRange, setDateRange] = useState<'1w' | '1m' | '3m' | '6m' | '1y'>('1m');
@@ -24,7 +26,7 @@ const PortfolioPerformancePage: React.FC = () => {
   const loadData = useCallback(() => {
     if (portfolioId) {
       fetchPortfolio(portfolioId);
-      const daysMap = { '1w': 7, '1m': 30, '3m': 90, '6m': 180, '1y': 365 };
+      const daysMap: Record<string, number> = { '1w': 7, '1m': 30, '3m': 90, '6m': 180, '1y': 365 };
       const endDate = new Date();
       const startDate = new Date();
       startDate.setDate(endDate.getDate() - daysMap[dateRange]);
@@ -41,6 +43,15 @@ const PortfolioPerformancePage: React.FC = () => {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => {
+        clearError();
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [error, clearError]);
+
   const handleExport = async () => {
     const { portfolioApi } = await import('../api/portfolio');
     try {
@@ -52,7 +63,9 @@ const PortfolioPerformancePage: React.FC = () => {
       const a = document.createElement('a');
       a.href = url;
       a.download = `portfolio_${portfolioId}_performance.csv`;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Export failed:', err);
@@ -69,8 +82,28 @@ const PortfolioPerformancePage: React.FC = () => {
 
   const stats = performance?.statistics;
 
+  const holdingsInfo = currentPortfolio?.holdings
+    ?.filter(h => !h.isClosed)
+    .map(h => ({ code: h.code, name: h.name })) || [];
+
+  const closedHoldings = currentPortfolio?.holdings
+    ?.filter(h => h.isClosed) || [];
+
   return (
     <div className="min-h-screen flex flex-col">
+      {error && (
+        <div className="fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-lg border border-danger/30 bg-danger/10 backdrop-blur-sm animate-slide-in-right">
+          <span className="text-danger">✕</span>
+          <span className="text-sm text-white">{error}</span>
+          <button
+            onClick={clearError}
+            className="text-muted hover:text-white transition-colors"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <header className="flex-shrink-0 px-4 py-3 border-b border-white/5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -136,23 +169,32 @@ const PortfolioPerformancePage: React.FC = () => {
           </div>
         </div>
 
-        <div className="glass-card p-8 min-h-[300px] flex items-center justify-center">
-          {performance?.dataPoints && performance.dataPoints.length > 0 ? (
-            <div className="w-full">
-              <div className="text-center text-muted mb-4">
-                图表渲染区域 - {performance.dataPoints.length} 个数据点
-              </div>
-            </div>
-          ) : (
-            <div className="text-center text-muted">
-              <svg className="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                  d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
-              <p>暂无收益数据</p>
-              <p className="text-xs mt-1">请先添加持仓并触发计算</p>
+        <div className="glass-card p-4">
+          {isLoading && performance && (
+            <div className="absolute inset-0 bg-[#08080c]/50 flex items-center justify-center z-10">
+              <div className="w-6 h-6 border-2 border-cyan/20 border-t-cyan rounded-full animate-spin" />
             </div>
           )}
+          <PerformanceChart
+            dataPoints={performance?.dataPoints || []}
+            viewMode={viewMode}
+            holdings={holdingsInfo}
+          />
+        </div>
+
+        <div className="flex gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-0.5 bg-[#00d4ff] rounded"></span>
+            <span className="text-xs text-muted">总盈亏</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-0.5 bg-[#00ff88] rounded border-dashed border-t border-t-[#00ff88]"></span>
+            <span className="text-xs text-muted">浮动盈亏</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-0.5 bg-[#ffaa00] rounded border-dashed border-t border-t-[#ffaa00]"></span>
+            <span className="text-xs text-muted">已实现盈亏</span>
+          </div>
         </div>
 
         {stats && (
@@ -165,6 +207,7 @@ const PortfolioPerformancePage: React.FC = () => {
             <SummaryCard
               title="浮动盈亏"
               value={`${stats.unrealizedReturnPct >= 0 ? '+' : ''}${stats.unrealizedReturnPct.toFixed(2)}%`}
+              subtitle={stats.unrealizedReturnPct >= 0 ? '+' : ''}
               trend={stats.unrealizedReturnPct >= 0 ? 'up' : 'down'}
             />
             <SummaryCard
@@ -180,7 +223,37 @@ const PortfolioPerformancePage: React.FC = () => {
           </div>
         )}
 
-        {performance?.dataPoints && performance.dataPoints.length > 0 && (
+        {stats && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <SummaryCard
+              title="最佳交易日"
+              value={stats.bestDay?.pnlPct != null ? `${stats.bestDay.pnlPct >= 0 ? '+' : ''}${stats.bestDay.pnlPct.toFixed(2)}%` : '--'}
+              subtitle={stats.bestDay?.date ? new Date(stats.bestDay.date).toLocaleDateString('zh-CN') : undefined}
+              trend={stats.bestDay?.pnlPct && stats.bestDay.pnlPct >= 0 ? 'up' : 'down'}
+            />
+            <SummaryCard
+              title="最差交易日"
+              value={stats.worstDay?.pnlPct != null ? `${stats.worstDay.pnlPct >= 0 ? '+' : ''}${stats.worstDay.pnlPct.toFixed(2)}%` : '--'}
+              subtitle={stats.worstDay?.date ? new Date(stats.worstDay.date).toLocaleDateString('zh-CN') : undefined}
+              trend={stats.worstDay?.pnlPct && stats.worstDay.pnlPct >= 0 ? 'up' : 'down'}
+            />
+            <SummaryCard
+              title="活跃持仓"
+              value={`${currentPortfolio?.holdings?.filter(h => !h.isClosed).length || 0}只`}
+              trend="neutral"
+            />
+            <SummaryCard
+              title="本周平仓"
+              value={`${performance?.dataPoints?.[performance.dataPoints.length - 1]?.holdings ? Object.keys(performance.dataPoints[performance.dataPoints.length - 1].holdings || {}).filter(k => {
+                const h = currentPortfolio?.holdings?.find(hold => hold.code === k);
+                return h?.isClosed;
+              }).length : 0}只`}
+              trend="neutral"
+            />
+          </div>
+        )}
+
+        {currentPortfolio && holdingsInfo.length > 0 && (
           <div className="glass-card p-4">
             <h3 className="text-sm font-medium text-white mb-3">持仓收益分解</h3>
             <div className="overflow-x-auto">
@@ -188,24 +261,81 @@ const PortfolioPerformancePage: React.FC = () => {
                 <thead>
                   <tr className="bg-elevated text-left">
                     <th className="px-3 py-2 text-xs font-medium text-secondary">代码</th>
+                    <th className="px-3 py-2 text-xs font-medium text-secondary">名称</th>
                     <th className="px-3 py-2 text-xs font-medium text-secondary text-right">贡献度</th>
                     <th className="px-3 py-2 text-xs font-medium text-secondary text-right">收益率</th>
                     <th className="px-3 py-2 text-xs font-medium text-secondary text-right">占比</th>
+                    <th className="px-3 py-2 text-xs font-medium text-secondary">区间收益</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {currentPortfolio?.holdings.filter(h => !h.isClosed).map((holding) => (
-                    <tr key={holding.id} className="border-t border-white/5">
-                      <td className="px-3 py-2 font-mono text-cyan">{holding.code}</td>
-                      <td className={`px-3 py-2 text-right font-mono ${(holding.weightedPnl ?? 0) >= 0 ? 'text-success' : 'text-danger'}`}>
-                        {(holding.weightedPnl ?? 0) >= 0 ? '+' : ''}{(holding.weightedPnl ?? 0).toFixed(2)}%
-                      </td>
-                      <td className={`px-3 py-2 text-right font-mono ${(holding.pnlPct ?? 0) >= 0 ? 'text-success' : 'text-danger'}`}>
-                        {(holding.pnlPct ?? 0) >= 0 ? '+' : ''}{(holding.pnlPct ?? 0).toFixed(2)}%
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono text-secondary">{holding.weight}%</td>
-                    </tr>
-                  ))}
+                  {currentPortfolio.holdings.filter(h => !h.isClosed).map((holding) => {
+                    const weightedPnl = holding.pnlPct * holding.weight / 100;
+                    const barWidth = Math.min(Math.abs(holding.pnlPct) * 10, 100);
+                    return (
+                      <tr key={holding.id} className="border-t border-white/5">
+                        <td className="px-3 py-2 font-mono text-cyan text-xs">{holding.code}</td>
+                        <td className="px-3 py-2 text-xs text-white">{holding.name}</td>
+                        <td className={`px-3 py-2 text-right font-mono text-xs ${weightedPnl >= 0 ? 'text-success' : 'text-danger'}`}>
+                          {weightedPnl >= 0 ? '+' : ''}{weightedPnl.toFixed(2)}%
+                        </td>
+                        <td className={`px-3 py-2 text-right font-mono text-xs ${(holding.pnlPct ?? 0) >= 0 ? 'text-success' : 'text-danger'}`}>
+                          {(holding.pnlPct ?? 0) >= 0 ? '+' : ''}{(holding.pnlPct ?? 0).toFixed(2)}%
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-xs text-secondary">{holding.weight}%</td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-24 h-2 bg-elevated rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${(holding.pnlPct ?? 0) >= 0 ? 'bg-success' : 'bg-danger'}`}
+                                style={{ width: `${barWidth}%` }}
+                              />
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {closedHoldings.length > 0 && (
+          <div className="glass-card p-4">
+            <h3 className="text-sm font-medium text-white mb-3">已平仓持仓收益</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-elevated text-left">
+                    <th className="px-3 py-2 text-xs font-medium text-secondary">代码</th>
+                    <th className="px-3 py-2 text-xs font-medium text-secondary">名称</th>
+                    <th className="px-3 py-2 text-xs font-medium text-secondary text-right">收益率</th>
+                    <th className="px-3 py-2 text-xs font-medium text-secondary text-right">平仓盈亏</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {closedHoldings.map((holding) => {
+                    const pnlAmount = holding.closeQuantity && holding.closePrice && holding.entryPrice
+                      ? (holding.closePrice - holding.entryPrice) * holding.closeQuantity
+                      : 0;
+                    const pnlPct = holding.entryPrice > 0 && holding.closePrice
+                      ? ((holding.closePrice - holding.entryPrice) / holding.entryPrice) * 100
+                      : 0;
+                    return (
+                      <tr key={holding.id} className="border-t border-white/5 opacity-60">
+                        <td className="px-3 py-2 font-mono text-xs text-muted">{holding.code}</td>
+                        <td className="px-3 py-2 text-xs text-secondary">{holding.name}</td>
+                        <td className={`px-3 py-2 text-right font-mono text-xs ${pnlPct >= 0 ? 'text-success' : 'text-danger'}`}>
+                          {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
+                        </td>
+                        <td className={`px-3 py-2 text-right font-mono text-xs ${pnlAmount >= 0 ? 'text-success' : 'text-danger'}`}>
+                          {pnlAmount >= 0 ? '+' : ''}¥{Math.abs(pnlAmount).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

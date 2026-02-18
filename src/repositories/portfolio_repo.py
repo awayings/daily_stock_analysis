@@ -53,7 +53,7 @@ class PortfolioRepository:
         with self.db.get_session() as session:
             return session.execute(
                 select(Portfolio).where(Portfolio.id == portfolio_id)
-            ).scalar_one_or_none()
+            ).scalars().first()
 
     def get_portfolio_by_name(self, name: str, include_deleted: bool = False) -> Optional[Portfolio]:
         """根据名称获取组合"""
@@ -63,7 +63,7 @@ class PortfolioRepository:
                 conditions.append(Portfolio.is_deleted == False)
             return session.execute(
                 select(Portfolio).where(and_(*conditions))
-            ).scalar_one_or_none()
+            ).scalars().first()
 
     def get_portfolio_list(
         self,
@@ -91,7 +91,7 @@ class PortfolioRepository:
         with self.db.get_session() as session:
             portfolio = session.execute(
                 select(Portfolio).where(Portfolio.id == portfolio_id)
-            ).scalar_one_or_none()
+            ).scalars().first()
 
             if portfolio:
                 for key, value in kwargs.items():
@@ -107,7 +107,7 @@ class PortfolioRepository:
         with self.db.get_session() as session:
             portfolio = session.execute(
                 select(Portfolio).where(Portfolio.id == portfolio_id)
-            ).scalar_one_or_none()
+            ).scalars().first()
 
             if portfolio:
                 portfolio.is_deleted = True
@@ -121,7 +121,7 @@ class PortfolioRepository:
         with self.db.get_session() as session:
             portfolio = session.execute(
                 select(Portfolio).where(Portfolio.id == portfolio_id)
-            ).scalar_one_or_none()
+            ).scalars().first()
 
             if portfolio:
                 portfolio.is_deleted = False
@@ -181,14 +181,14 @@ class PortfolioRepository:
         with self.db.get_session() as session:
             return session.execute(
                 select(PortfolioHolding).where(PortfolioHolding.id == holding_id)
-            ).scalar_one_or_none()
+            ).scalars().first()
 
     def update_holding(self, holding_id: int, **kwargs) -> Optional[PortfolioHolding]:
         """更新持仓"""
         with self.db.get_session() as session:
             holding = session.execute(
                 select(PortfolioHolding).where(PortfolioHolding.id == holding_id)
-            ).scalar_one_or_none()
+            ).scalars().first()
 
             if holding:
                 for key, value in kwargs.items():
@@ -210,7 +210,7 @@ class PortfolioRepository:
         with self.db.get_session() as session:
             holding = session.execute(
                 select(PortfolioHolding).where(PortfolioHolding.id == holding_id)
-            ).scalar_one_or_none()
+            ).scalars().first()
 
             if holding:
                 holding.is_closed = True
@@ -237,8 +237,8 @@ class PortfolioRepository:
                         PortfolioHolding.is_closed == True,
                         PortfolioHolding.closed_at >= since
                     )
-                ).scalars().all()
-            ))
+                )
+            ).scalars().all())
 
     def count_holdings(self, portfolio_id: int, include_closed: bool = False) -> int:
         """统计持仓数量"""
@@ -274,9 +274,27 @@ class PortfolioRepository:
                 error_message=data.get('error_message')
             )
             session.add(history)
+            session.flush()
+            
+            result = PortfolioHistory(
+                id=history.id,
+                portfolio_id=history.portfolio_id,
+                snapshot_date=history.snapshot_date,
+                total_value=history.total_value,
+                unrealized_pnl_pct=history.unrealized_pnl_pct,
+                unrealized_pnl_amount=history.unrealized_pnl_amount,
+                realized_pnl_amount=history.realized_pnl_amount,
+                cumulative_realized_pnl=history.cumulative_realized_pnl,
+                total_pnl_pct=history.total_pnl_pct,
+                total_pnl_amount=history.total_pnl_amount,
+                active_holdings_count=history.active_holdings_count,
+                closed_holdings_count=history.closed_holdings_count,
+                calculation_status=history.calculation_status,
+                calculated_at=history.calculated_at,
+                error_message=history.error_message
+            )
             session.commit()
-            session.refresh(history)
-            return history
+            return result
 
     def get_history(
         self,
@@ -314,7 +332,7 @@ class PortfolioRepository:
                 .where(PortfolioHistory.portfolio_id == portfolio_id)
                 .order_by(PortfolioHistory.snapshot_date.desc())
                 .limit(1)
-            ).scalar_one_or_none()
+            ).scalars().first()
 
     def save_holding_snapshots(
         self,
@@ -323,7 +341,7 @@ class PortfolioRepository:
     ) -> List[HoldingSnapshot]:
         """保存持仓快照"""
         with self.db.get_session() as session:
-            results = []
+            result_snapshots = []
             for data in snapshots:
                 snapshot = HoldingSnapshot(
                     history_id=history_id,
@@ -336,13 +354,22 @@ class PortfolioRepository:
                     weighted_pnl=data.get('weighted_pnl')
                 )
                 session.add(snapshot)
-                results.append(snapshot)
+                session.flush()
+                
+                result_snapshots.append(HoldingSnapshot(
+                    id=snapshot.id,
+                    history_id=snapshot.history_id,
+                    code=snapshot.code,
+                    name=snapshot.name,
+                    entry_price=snapshot.entry_price,
+                    current_price=snapshot.current_price,
+                    weight=snapshot.weight,
+                    pnl_pct=snapshot.pnl_pct,
+                    weighted_pnl=snapshot.weighted_pnl
+                ))
 
             session.commit()
-            for s in results:
-                session.refresh(s)
-
-            return results
+            return result_snapshots
 
     def get_holding_snapshots(self, history_id: int) -> List[HoldingSnapshot]:
         """获取持仓快照"""
@@ -350,5 +377,5 @@ class PortfolioRepository:
             return list(session.execute(
                 select(HoldingSnapshot).where(
                     HoldingSnapshot.history_id == history_id
-                ).scalars().all()
-            ))
+                )
+            ).scalars().all())

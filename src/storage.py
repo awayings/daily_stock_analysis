@@ -882,7 +882,7 @@ class DatabaseManager:
                         StockDaily.date == target_date
                     )
                 )
-            ).scalar_one_or_none()
+            ).scalars().first()
             
             return result is not None
     
@@ -1273,7 +1273,7 @@ class DatabaseManager:
                                     StockDaily.date == row_date
                                 )
                             )
-                        ).scalar_one_or_none()
+                        ).scalars().first()
                         
                         if existing:
                             existing.open = row.get('open')

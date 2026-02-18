@@ -5,3 +5,4 @@ export { AddHoldingModal } from './AddHoldingModal';
 export { ClosePositionModal } from './ClosePositionModal';
 export { DeleteConfirmModal } from './DeleteConfirmModal';
 export { SummaryCard } from './SummaryCard';
+export { PerformanceChart } from './PerformanceChart';

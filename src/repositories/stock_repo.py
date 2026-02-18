@@ -146,7 +146,7 @@ class StockRepository:
                 .where(and_(StockDaily.code == code, StockDaily.date <= analysis_date))
                 .order_by(desc(StockDaily.date))
                 .limit(1)
-            ).scalar_one_or_none()
+            ).scalars().first()
             return row
 
     def get_forward_bars(self, *, code: str, analysis_date: date, eval_window_days: int) -> List[StockDaily]:

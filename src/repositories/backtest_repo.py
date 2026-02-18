@@ -137,7 +137,7 @@ class BacktestRepository:
                     )
                 )
                 .limit(1)
-            ).scalar_one_or_none()
+            ).scalars().first()
 
             if existing:
                 for attr in (
@@ -191,7 +191,7 @@ class BacktestRepository:
                 .where(and_(*conditions))
                 .order_by(desc(BacktestSummary.computed_at))
                 .limit(1)
-            ).scalar_one_or_none()
+            ).scalars().first()
             return row
 
     @staticmethod
