@@ -63,10 +63,10 @@ class PortfolioService:
             raise ValueError(f"PORTFOLIO_006: 最多创建 {self.MAX_PORTFOLIOS} 个组合")
 
 
-#        if holdings:
- #           total_weight = sum(h.get('weight', 0) for h in holdings)
-  #          if abs(total_weight - 100) > 0.01:
-   #             raise ValueError("PORTFOLIO_005: 仓位占比总和必须等于100%")
+        # if holdings:
+        #     total_weight = sum(h.get('weight', 0) for h in holdings)
+        #     if abs(total_weight - 100) > 0.01:
+        #         raise ValueError("PORTFOLIO_005: 仓位占比总和必须等于100%")
 
         portfolio = self.repo.create_portfolio(
             name=name,
