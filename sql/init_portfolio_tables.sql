@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS `portfolio_holdings` (
     `code` VARCHAR(20) NOT NULL COMMENT '股票代码',
     `name` VARCHAR(100) COMMENT '股票名称',
     `entry_price` DECIMAL(18,4) NOT NULL COMMENT '建仓价格',
+    `last_price` DECIMAL(18,4) NOT NULL COMMENT '上次更新价格',
     `weight` DECIMAL(5,2) NOT NULL COMMENT '仓位占比(0-100)',
     `shares` DECIMAL(18,4) COMMENT '股数',
     `is_closed` INT NOT NULL DEFAULT 0 COMMENT '平仓标记',

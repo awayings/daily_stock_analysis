@@ -62,10 +62,11 @@ class PortfolioService:
         if count >= self.MAX_PORTFOLIOS:
             raise ValueError(f"PORTFOLIO_006: 最多创建 {self.MAX_PORTFOLIOS} 个组合")
 
-        if holdings:
-            total_weight = sum(h.get('weight', 0) for h in holdings)
-            if abs(total_weight - 100) > 0.01:
-                raise ValueError("PORTFOLIO_005: 仓位占比总和必须等于100%")
+
+#        if holdings:
+ #           total_weight = sum(h.get('weight', 0) for h in holdings)
+  #          if abs(total_weight - 100) > 0.01:
+   #             raise ValueError("PORTFOLIO_005: 仓位占比总和必须等于100%")
 
         portfolio = self.repo.create_portfolio(
             name=name,
@@ -80,12 +81,15 @@ class PortfolioService:
             for h in holdings:
                 code = h['code']
                 name = stock_service.get_realtime_quote(code).get('stock_name') if stock_service else h.get('name', code)
+                entry_price = Decimal(str(h['entry_price']))
+                last_price = Decimal(str(h.get('last_price', h['entry_price'])))
 
                 holding = self.repo.add_holding(
                     portfolio_id=portfolio.id,
                     code=code,
                     name=name,
-                    entry_price=Decimal(str(h['entry_price'])),
+                    entry_price=entry_price,
+                    last_price=last_price,
                     weight=Decimal(str(h['weight']))
                 )
                 created_holdings.append(holding)
@@ -204,7 +208,8 @@ class PortfolioService:
         portfolio_id: int,
         code: str,
         entry_price: Decimal,
-        weight: Decimal
+        weight: Decimal,
+        last_price: Optional[Decimal] = None
     ) -> Dict[str, Any]:
         """添加持仓"""
         portfolio = self.repo.get_portfolio_by_id(portfolio_id)
@@ -229,11 +234,15 @@ class PortfolioService:
         stock_service = self._get_stock_service()
         name = stock_service.get_realtime_quote(code).get('stock_name') if stock_service else code
 
+        if last_price is None:
+            last_price = entry_price
+
         holding = self.repo.add_holding(
             portfolio_id=portfolio_id,
             code=code,
             name=name,
             entry_price=entry_price,
+            last_price=last_price,
             weight=weight
         )
 
@@ -389,6 +398,7 @@ class PortfolioService:
         for h in holdings:
             code = h['code']
             entry_price = Decimal(str(h['entry_price']))
+            last_price = Decimal(str(h.get('last_price', h['entry_price'])))
             weight = Decimal(str(h['weight']))
 
             existing = next((eh for eh in existing_active if eh.code == code), None)
@@ -410,6 +420,7 @@ class PortfolioService:
                 code=code,
                 name=name,
                 entry_price=entry_price,
+                last_price=last_price,
                 weight=weight
             )
             added_holdings.append(holding)
@@ -635,7 +646,9 @@ class PortfolioService:
             if not h.is_closed:
                 quote = stock_service.get_realtime_quote(h.code) if stock_service else None
                 if quote:
-                    current_prices[h.code] = Decimal(str(quote['current_price']))
+                    current_price = Decimal(str(quote['current_price']))
+                    current_prices[h.code] = current_price
+                    self.repo.update_holding(h.id, last_price=current_price)
 
         last_history = self.repo.get_latest_history(portfolio.id)
         cumulative_realized_pnl = Decimal(str(last_history.cumulative_realized_pnl)) if last_history else Decimal('0')
@@ -646,8 +659,8 @@ class PortfolioService:
 
         for h in holdings:
             if not h.is_closed:
-                current_price = current_prices.get(h.code, h.entry_price)
-                pnl_pct = ((current_price / h.entry_price - 1) * 100) if h.entry_price > 0 else Decimal('0')
+                current_price = current_prices.get(h.code, h.last_price)
+                pnl_pct = ((current_price / h.last_price - 1) * 100) if h.last_price > 0 else Decimal('0')
                 weighted_pnl = pnl_pct * h.weight / 100
                 unrealized_pnl += weighted_pnl
                 active_count += 1
@@ -754,9 +767,9 @@ class PortfolioService:
         stock_service = self._get_stock_service()
 
         quote = stock_service.get_realtime_quote(holding.code) if stock_service else None
-        current_price = Decimal(str(quote['current_price'])) if quote else holding.entry_price
+        current_price = Decimal(str(quote['current_price'])) if quote else holding.last_price
 
-        pnl_pct = ((current_price / holding.entry_price - 1) * 100) if holding.entry_price > 0 else Decimal('0')
+        pnl_pct = ((current_price / holding.last_price - 1) * 100) if holding.last_price > 0 else Decimal('0')
 
         return {
             'id': holding.id,
@@ -764,6 +777,7 @@ class PortfolioService:
             'code': holding.code,
             'name': holding.name,
             'entry_price': float(holding.entry_price),
+            'last_price': float(holding.last_price),
             'current_price': float(current_price),
             'weight': float(holding.weight),
             'shares': float(holding.shares) if holding.shares else None,
@@ -783,9 +797,9 @@ class PortfolioService:
 
         for h in active_holdings:
             quote = stock_service.get_realtime_quote(h.code) if stock_service else None
-            current_price = Decimal(str(quote['current_price'])) if quote else h.entry_price
+            current_price = Decimal(str(quote['current_price'])) if quote else h.last_price
 
-            pnl_pct = ((current_price / h.entry_price - 1) * 100) if h.entry_price > 0 else Decimal('0')
+            pnl_pct = ((current_price / h.last_price - 1) * 100) if h.last_price > 0 else Decimal('0')
             weighted_pnl = pnl_pct * h.weight / 100
             total_pnl += weighted_pnl
 

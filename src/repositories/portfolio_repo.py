@@ -144,6 +144,7 @@ class PortfolioRepository:
         code: str,
         name: str,
         entry_price: Decimal,
+        last_price: Decimal,
         weight: Decimal,
         shares: Optional[Decimal] = None
     ) -> PortfolioHolding:
@@ -154,6 +155,7 @@ class PortfolioRepository:
                 code=code,
                 name=name,
                 entry_price=entry_price,
+                last_price=last_price,
                 weight=weight,
                 shares=shares
             )

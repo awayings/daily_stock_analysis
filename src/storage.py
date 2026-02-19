@@ -453,6 +453,7 @@ class PortfolioHolding(SQLITE_BASE):
     code = Column(String(20), nullable=False)
     name = Column(String(100))
     entry_price = Column(Numeric(18, 4), nullable=False)
+    last_price = Column(Numeric(18, 4), nullable=False)
     weight = Column(Numeric(5, 2), nullable=False)
     shares = Column(Numeric(18, 4))
     is_closed = Column(Integer, default=0)
@@ -476,6 +477,7 @@ class PortfolioHolding(SQLITE_BASE):
             'code': self.code,
             'name': self.name,
             'entry_price': float(self.entry_price) if self.entry_price else None,
+            'last_price': float(self.last_price) if self.last_price else None,
             'weight': float(self.weight) if self.weight else None,
             'shares': float(self.shares) if self.shares else None,
             'is_closed': self.is_closed,

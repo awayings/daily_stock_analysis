@@ -7,6 +7,7 @@ export interface Holding {
   code: string;
   name: string;
   entryPrice: number;
+  lastPrice: number;
   currentPrice: number;
   weight: number;
   shares?: number;
@@ -62,6 +63,7 @@ export interface CreatePortfolioRequest {
   holdings?: {
     code: string;
     entryPrice: number;
+    lastPrice?: number;
     weight: number;
   }[];
 }
@@ -107,6 +109,7 @@ export interface BatchHoldingsRequest {
   holdings: {
     code: string;
     entryPrice: number;
+    lastPrice?: number;
     weight: number;
   }[];
   rebalanceMode?: 'none' | 'equal' | 'keep_existing';
@@ -279,11 +282,12 @@ export const portfolioApi = {
 
   addHolding: async (
     portfolioId: number,
-    data: { code: string; entryPrice: number; weight: number },
+    data: { code: string; entryPrice: number; weight: number; lastPrice?: number },
   ): Promise<Holding> => {
     const requestData = {
       code: data.code,
       entry_price: data.entryPrice,
+      last_price: data.lastPrice,
       weight: data.weight,
     };
 

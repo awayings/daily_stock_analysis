@@ -38,7 +38,7 @@ export const HoldingTable: React.FC<HoldingTableProps> = ({ holdings, onClosePos
             <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider">代码</th>
             <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider">名称</th>
             <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider text-right">建仓价格</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider text-right">当前价格</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider text-right">上次价格</th>
             <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider text-right">占比</th>
             <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider text-right">盈亏</th>
             <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider">状态</th>
@@ -51,7 +51,7 @@ export const HoldingTable: React.FC<HoldingTableProps> = ({ holdings, onClosePos
               <td className="px-3 py-2 font-mono text-cyan text-xs">{holding.code}</td>
               <td className="px-3 py-2 text-xs text-white">{holding.name || '--'}</td>
               <td className="px-3 py-2 text-xs font-mono text-right text-secondary">{formatCurrency(holding.entryPrice)}</td>
-              <td className="px-3 py-2 text-xs font-mono text-right text-white">{formatCurrency(holding.currentPrice)}</td>
+              <td className="px-3 py-2 text-xs font-mono text-right text-white">{formatCurrency(holding.lastPrice)}</td>
               <td className="px-3 py-2 text-xs font-mono text-right text-secondary">{formatWeight(holding.weight)}</td>
               <td className={`px-3 py-2 text-xs font-mono text-right ${(holding.pnlPct ?? 0) >= 0 ? 'text-success' : 'text-danger'}`}>
                 {formatPnl(holding.pnlPct)}

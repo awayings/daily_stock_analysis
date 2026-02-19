@@ -256,7 +256,8 @@ async def add_holding(portfolio_id: int, request: HoldingCreate):
             portfolio_id=portfolio_id,
             code=request.code,
             entry_price=Decimal(str(request.entry_price)),
-            weight=Decimal(str(request.weight))
+            weight=Decimal(str(request.weight)),
+            last_price=Decimal(str(request.last_price)) if request.last_price else None
         )
         return result
 

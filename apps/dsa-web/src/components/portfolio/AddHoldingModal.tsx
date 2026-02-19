@@ -4,12 +4,13 @@ import { Button } from '../common';
 interface AddHoldingModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (data: { code: string; entryPrice: number; weight: number }) => void;
+  onAdd: (data: { code: string; entryPrice: number; weight: number; lastPrice?: number }) => void;
 }
 
 export const AddHoldingModal: React.FC<AddHoldingModalProps> = ({ isOpen, onClose, onAdd }) => {
   const [code, setCode] = useState('');
   const [entryPrice, setEntryPrice] = useState('');
+  const [lastPrice, setLastPrice] = useState('');
   const [weight, setWeight] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -24,10 +25,12 @@ export const AddHoldingModal: React.FC<AddHoldingModalProps> = ({ isOpen, onClos
       onAdd({
         code: code.toUpperCase(),
         entryPrice: parseFloat(entryPrice),
+        lastPrice: lastPrice ? parseFloat(lastPrice) : undefined,
         weight: parseFloat(weight),
       });
       setCode('');
       setEntryPrice('');
+      setLastPrice('');
       setWeight('');
       onClose();
     } finally {
@@ -72,6 +75,21 @@ export const AddHoldingModal: React.FC<AddHoldingModalProps> = ({ isOpen, onClos
                 placeholder="0.00"
                 className="input-terminal w-full pl-7"
                 required
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs text-secondary mb-1.5">上次价格 (可选)</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted">¥</span>
+              <input
+                type="number"
+                step="0.01"
+                value={lastPrice}
+                onChange={(e) => setLastPrice(e.target.value)}
+                placeholder="默认为建仓价格"
+                className="input-terminal w-full pl-7"
               />
             </div>
           </div>

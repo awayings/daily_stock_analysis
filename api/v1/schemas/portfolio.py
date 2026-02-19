@@ -18,12 +18,14 @@ class HoldingCreate(BaseModel):
     """持仓创建请求"""
     code: str = Field(..., description="股票代码")
     entry_price: float = Field(..., gt=0, description="建仓价格")
+    last_price: Optional[float] = Field(None, description="上次更新价格(默认为建仓价格)")
     weight: float = Field(..., gt=0, le=100, description="仓位占比")
 
 
 class HoldingUpdate(BaseModel):
     """持仓更新请求"""
     entry_price: Optional[float] = Field(None, gt=0, description="建仓价格")
+    last_price: Optional[float] = Field(None, gt=0, description="上次更新价格")
     weight: Optional[float] = Field(None, gt=0, le=100, description="仓位占比")
 
 
@@ -34,6 +36,7 @@ class HoldingResponse(BaseModel):
     code: str
     name: Optional[str] = None
     entry_price: float
+    last_price: Optional[float] = None
     current_price: Optional[float] = None
     weight: float
     shares: Optional[float] = None
