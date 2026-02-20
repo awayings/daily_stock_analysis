@@ -228,8 +228,8 @@ class PortfolioService:
 
         existing_holdings = self.repo.get_holdings(portfolio_id, include_closed=True)
         total_weight = sum(h.weight for h in existing_holdings if not h.is_closed)
-        if abs(total_weight + weight - 100) > 0.01:
-            raise ValueError("PORTFOLIO_005: 仓位占比总和必须等于100%")
+        if total_weight + weight > 100:
+            raise ValueError("PORTFOLIO_005: 仓位占比总和不能超过100%")
 
         stock_service = self._get_stock_service()
         name = stock_service.get_realtime_quote_from_db(code).get('stock_name') if stock_service else code
@@ -278,8 +278,8 @@ class PortfolioService:
 
             holdings = self.repo.get_holdings(portfolio_id)
             total_weight = sum(h.weight for h in holdings if h.id != holding_id)
-            if abs(total_weight + weight - 100) > 0.01:
-                raise ValueError("PORTFOLIO_005: 仓位占比总和必须等于100%")
+            if total_weight + weight > 100:
+                raise ValueError("PORTFOLIO_005: 仓位占比总和不能超过100%")
             kwargs['weight'] = weight
 
         updated = self.repo.update_holding(holding_id, **kwargs)
@@ -435,7 +435,8 @@ class PortfolioService:
             'holdings': [self._build_holding_response(h) for h in added_holdings],
             'weight_summary': {
                 'total': float(final_total),
-                'is_valid': abs(final_total - 100) < 0.01
+                'remaining': float(100 - final_total),
+                'is_valid': final_total <= 100
             }
         }
 

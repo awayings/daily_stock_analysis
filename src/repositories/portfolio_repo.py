@@ -44,8 +44,9 @@ class PortfolioRepository:
                 currency=currency
             )
             session.add(portfolio)
-            session.commit()
+            session.flush()
             session.refresh(portfolio)
+            session.commit()
             return portfolio
 
     def get_portfolio_by_id(self, portfolio_id: int) -> Optional[Portfolio]:
@@ -97,8 +98,9 @@ class PortfolioRepository:
                 for key, value in kwargs.items():
                     if hasattr(portfolio, key):
                         setattr(portfolio, key, value)
-                session.commit()
+                session.flush()
                 session.refresh(portfolio)
+                session.commit()
 
             return portfolio
 
@@ -160,8 +162,9 @@ class PortfolioRepository:
                 shares=shares
             )
             session.add(holding)
-            session.commit()
+            session.flush()
             session.refresh(holding)
+            session.commit()
             return holding
 
     def get_holdings(
@@ -196,8 +199,9 @@ class PortfolioRepository:
                 for key, value in kwargs.items():
                     if hasattr(holding, key):
                         setattr(holding, key, value)
-                session.commit()
+                session.flush()
                 session.refresh(holding)
+                session.commit()
 
             return holding
 
@@ -220,8 +224,9 @@ class PortfolioRepository:
                 holding.close_quantity = close_quantity
                 holding.close_type = close_type
                 holding.closed_at = datetime.now()
-                session.commit()
+                session.flush()
                 session.refresh(holding)
+                session.commit()
 
             return holding
 

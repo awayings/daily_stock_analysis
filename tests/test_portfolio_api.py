@@ -94,8 +94,8 @@ class TestPortfolioAPI:
         assert 'detail' in data
 
     def test_create_portfolio_invalid_weights(self, client, mock_portfolio_service):
-        """测试仓位占比不正确"""
-        mock_portfolio_service.create_portfolio.side_effect = ValueError("PORTFOLIO_005: 仓位占比总和必须等于100%")
+        """测试仓位占比超过100%"""
+        mock_portfolio_service.create_portfolio.side_effect = ValueError("PORTFOLIO_005: 仓位占比总和不能超过100%")
 
         response = client.post(
             "/api/v1/portfolios",

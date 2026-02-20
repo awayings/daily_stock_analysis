@@ -24,7 +24,7 @@ const PortfolioCreatePage: React.FC = () => {
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const totalWeight = holdings.reduce((sum, h) => sum + (parseFloat(h.weight) || 0), 0);
-  const isWeightValid = Math.abs(totalWeight - 100) < 0.01;
+  const isWeightValid = totalWeight <= 100;
 
   const handleAddHolding = () => {
     if (!newHolding.code || !newHolding.entryPrice || !newHolding.weight) return;
@@ -59,7 +59,7 @@ const PortfolioCreatePage: React.FC = () => {
     }
 
     if (!isWeightValid) {
-      setSubmitError('仓位占比总和必须等于100%');
+      setSubmitError('仓位占比总和不能超过100%');
       return;
     }
 
@@ -278,9 +278,14 @@ const PortfolioCreatePage: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <span className="text-sm">
                     仓位占比总和：
-                    <span className={`font-mono ml-2 ${isWeightValid ? 'text-success' : 'text-warning'}`}>
+                    <span className={`font-mono ml-2 ${isWeightValid ? 'text-success' : 'text-danger'}`}>
                       {totalWeight.toFixed(2)}%
                     </span>
+                    {isWeightValid && totalWeight < 100 && (
+                      <span className="text-muted ml-2">
+                        (剩余 {(100 - totalWeight).toFixed(2)}% 未分配)
+                      </span>
+                    )}
                     {isWeightValid && (
                       <svg className="w-4 h-4 text-success inline ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />

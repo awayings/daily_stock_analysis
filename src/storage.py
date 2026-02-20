@@ -702,12 +702,14 @@ class DatabaseManager:
             db_url,
             echo=False,
             pool_pre_ping=True,
+            pool_recycle=3600,
         )
         
         self._SessionLocal = sessionmaker(
             bind=self._engine,
             autocommit=False,
             autoflush=False,
+            expire_on_commit=False,
         )
         
         if not self._is_doris:
