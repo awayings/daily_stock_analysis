@@ -69,6 +69,9 @@ def parse_arguments() -> argparse.Namespace:
   python main.py --single-notify    # 启用单股推送模式（每分析完一只立即推送）
   python main.py --schedule         # 启用定时任务模式
   python main.py --market-review    # 仅运行大盘复盘
+  python main.py --sync-daily       # 执行日线数据同步
+  python main.py --sync-daily --date 2024-01-15  # 同步指定日期数据
+  python main.py --sync-daily --notify  # 同步并发送钉钉通知
         '''
     )
 
@@ -198,7 +201,159 @@ def parse_arguments() -> argparse.Namespace:
         help='强制回测（即使已有回测结果也重新计算）'
     )
 
+    parser.add_argument(
+        '--sync-daily',
+        action='store_true',
+        help='执行日线数据同步'
+    )
+
+    parser.add_argument(
+        '--date',
+        type=str,
+        default=None,
+        help='指定同步日期（YYYY-MM-DD 格式，默认今天）'
+    )
+
+    parser.add_argument(
+        '--notify',
+        action='store_true',
+        help='同步完成后发送钉钉通知'
+    )
+
     return parser.parse_args()
+
+
+def run_daily_sync(args: argparse.Namespace) -> int:
+    """
+    执行日线数据同步
+    
+    Args:
+        args: 命令行参数
+        
+    Returns:
+        退出码（0 表示成功，1 表示失败）
+    """
+    from datetime import date as date_type
+    from src.services.daily_sync_service import DailyStockSyncService
+    from src.services.validation_service import DataValidationService
+    from src.storage import DatabaseManager
+    
+    sync_date = None
+    if args.date:
+        try:
+            sync_date = datetime.strptime(args.date, '%Y-%m-%d').date()
+        except ValueError:
+            logger.error(f"日期格式错误: {args.date}，请使用 YYYY-MM-DD 格式")
+            return 1
+    else:
+        sync_date = date_type.today()
+    
+    logger.info("=" * 60)
+    logger.info(f"日线数据同步开始 - 目标日期: {sync_date}")
+    logger.info("=" * 60)
+    
+    try:
+        sync_service = DailyStockSyncService()
+        validation_service = DataValidationService()
+        db_manager = DatabaseManager.get_instance()
+        
+        logger.info("正在同步股票日线数据...")
+        sync_stats = sync_service.sync_all_stocks(sync_date=sync_date)
+        
+        total = sync_stats.get('total', 0)
+        success = sync_stats.get('success', 0)
+        failed = sync_stats.get('failed', 0)
+        data_sources = sync_stats.get('data_sources', '')
+        errors = sync_stats.get('errors', [])
+        
+        logger.info(f"同步完成: 总计 {total} 只股票")
+        logger.info(f"  成功: {success}")
+        logger.info(f"  失败: {failed}")
+        logger.info(f"  数据源: {data_sources or '无'}")
+        
+        if errors:
+            logger.warning(f"  错误详情 (前 10 条):")
+            for err in errors[:10]:
+                logger.warning(f"    - {err}")
+        
+        logger.info("\n正在执行数据验证...")
+        validation_result = validation_service.validate(
+            sync_date=sync_date,
+            sync_stats=sync_stats
+        )
+        
+        validation_passed = validation_result.get('passed', False)
+        validation_details = validation_result.get('validation_details', '')
+        
+        if validation_passed:
+            logger.info("✅ 数据验证通过")
+        else:
+            logger.warning(f"⚠️ 数据验证未通过: {validation_details}")
+        
+        stats_record = {
+            'sync_date': sync_date,
+            'total_stocks': total,
+            'success_count': success,
+            'failed_count': failed,
+            'data_sources': data_sources,
+            'validation_passed': validation_passed,
+            'validation_details': validation_result,
+        }
+        
+        saved_id = db_manager.save_sync_statistics(stats_record)
+        if saved_id:
+            logger.info(f"同步统计已保存 (ID: {saved_id})")
+        else:
+            logger.warning("同步统计保存失败")
+        
+        if args.notify:
+            logger.info("\n正在发送钉钉通知...")
+            try:
+                from src.notification import NotificationService
+                notifier = NotificationService()
+                
+                notify_message = (
+                    f"## 📊 日线数据同步报告\n\n"
+                    f"**同步日期**: {sync_date}\n\n"
+                    f"### 同步统计\n\n"
+                    f"| 指标 | 数量 |\n"
+                    f"| --- | --- |\n"
+                    f"| 总股票数 | {total} |\n"
+                    f"| 成功同步 | {success} |\n"
+                    f"| 同步失败 | {failed} |\n"
+                    f"| 数据源 | {data_sources or '无'} |\n\n"
+                    f"### 验证结果\n\n"
+                    f"| 项目 | 状态 |\n"
+                    f"| --- | --- |\n"
+                    f"| 数据验证 | {'✅ 通过' if validation_passed else '❌ 未通过'} |\n"
+                )
+                
+                if not validation_passed:
+                    notify_message += f"\n**详情**: {validation_details}\n"
+                
+                notifier.send(notify_message)
+                logger.info("✅ 钉钉通知发送成功")
+            except Exception as e:
+                logger.error(f"❌ 钉钉通知发送失败: {e}")
+        
+        print("\n" + "=" * 60)
+        print("日线数据同步完成")
+        print("=" * 60)
+        print(f"同步日期: {sync_date}")
+        print(f"总计: {total} 只股票")
+        print(f"成功: {success}")
+        print(f"失败: {failed}")
+        print(f"数据源: {data_sources or '无'}")
+        print(f"验证: {'✅ 通过' if validation_passed else '❌ 未通过'}")
+        if args.notify:
+            print("通知: ✅ 已发送")
+        print("=" * 60)
+        
+        return 0 if success > 0 else 1
+        
+    except Exception as e:
+        logger.exception(f"日线数据同步失败: {e}")
+        return 1
 
 
 def run_full_analysis(
@@ -466,6 +621,11 @@ def main() -> int:
         return 0
 
     try:
+        # 模式-1: 日线数据同步
+        if getattr(args, 'sync_daily', False):
+            logger.info("模式: 日线数据同步")
+            return run_daily_sync(args)
+
         # 模式0: 回测
         if getattr(args, 'backtest', False):
             logger.info("模式: 回测")

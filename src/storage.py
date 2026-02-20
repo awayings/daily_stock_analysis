@@ -599,6 +599,54 @@ class HoldingSnapshot(SQLITE_BASE):
         }
 
 
+class SyncStatistics(SQLITE_BASE):
+    """
+    同步统计记录模型
+
+    存储每日股票数据同步的统计信息，用于追踪同步历史
+
+    Doris UNIQUE KEY 模型：
+    - 主键: id
+    - 分布: HASH(id)
+    """
+    __tablename__ = 'sync_statistics'
+
+    __table_args__ = (
+        Index('ix_sync_statistics_sync_date', 'sync_date'),
+        Index('ix_sync_statistics_synced_at', 'synced_at'),
+        {'extend_existing': True},
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    sync_date = Column(Date, nullable=False)
+    total_stocks = Column(Integer)
+    success_count = Column(Integer)
+    failed_count = Column(Integer)
+    data_sources = Column(String(255))
+    validation_passed = Column(Boolean)
+    validation_details = Column(Text)
+    synced_at = Column(DateTime, default=datetime.now)
+
+    doris_unique_key = ('id',)
+    doris_distributed_by = None
+
+    def __repr__(self):
+        return f"<SyncStatistics(id={self.id}, sync_date={self.sync_date}, success={self.success_count}/{self.total_stocks})>"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'sync_date': self.sync_date.isoformat() if self.sync_date else None,
+            'total_stocks': self.total_stocks,
+            'success_count': self.success_count,
+            'failed_count': self.failed_count,
+            'data_sources': self.data_sources,
+            'validation_passed': self.validation_passed,
+            'validation_details': self.validation_details,
+            'synced_at': self.synced_at.isoformat() if self.synced_at else None,
+        }
+
+
 ALL_MODELS = [
     StockDaily,
     NewsIntel,
@@ -609,6 +657,7 @@ ALL_MODELS = [
     PortfolioHolding,
     PortfolioHistory,
     HoldingSnapshot,
+    SyncStatistics,
 ]
 
 
@@ -1510,6 +1559,71 @@ class DatabaseManager:
         raw_key = f"{code}|{title}|{source}|{date_str}"
         digest = hashlib.md5(raw_key.encode("utf-8")).hexdigest()
         return f"no-url:{code}:{digest}"
+
+    def save_sync_statistics(self, stats: Dict[str, Any]) -> int:
+        """
+        保存同步统计数据
+
+        Args:
+            stats: 同步统计字典，包含以下字段：
+                - sync_date: 同步日期（date 类型或字符串）
+                - total_stocks: 尝试同步的股票总数
+                - success_count: 成功数量
+                - failed_count: 失败数量
+                - data_sources: 数据源列表（逗号分隔的字符串）
+                - validation_passed: 验证是否通过
+                - validation_details: 验证详情（字典，会转为 JSON）
+
+        Returns:
+            保存的记录 ID，失败返回 0
+        """
+        sync_date_val = stats.get('sync_date')
+        if isinstance(sync_date_val, str):
+            sync_date_val = datetime.strptime(sync_date_val, '%Y-%m-%d').date()
+        elif isinstance(sync_date_val, datetime):
+            sync_date_val = sync_date_val.date()
+
+        validation_details = stats.get('validation_details')
+        if isinstance(validation_details, dict):
+            validation_details = self._safe_json_dumps(validation_details)
+
+        record = SyncStatistics(
+            sync_date=sync_date_val,
+            total_stocks=stats.get('total_stocks'),
+            success_count=stats.get('success_count'),
+            failed_count=stats.get('failed_count'),
+            data_sources=stats.get('data_sources'),
+            validation_passed=stats.get('validation_passed'),
+            validation_details=validation_details,
+            synced_at=datetime.now(),
+        )
+
+        with self.get_session() as session:
+            try:
+                session.merge(record)
+                session.commit()
+                logger.info(f"保存同步统计成功: sync_date={sync_date_val}, success={stats.get('success_count')}/{stats.get('total_stocks')}")
+                return record.id or 1
+            except Exception as e:
+                session.rollback()
+                logger.error(f"保存同步统计失败: {e}")
+                return 0
+
+    def get_latest_sync_statistics(self) -> Optional[SyncStatistics]:
+        """
+        获取最近一次同步统计记录
+
+        Returns:
+            最新的 SyncStatistics 对象，如果没有记录则返回 None
+        """
+        with self.get_session() as session:
+            result = session.execute(
+                select(SyncStatistics)
+                .order_by(desc(SyncStatistics.synced_at))
+                .limit(1)
+            ).scalars().first()
+
+            return result
 
 
 def get_db() -> DatabaseManager:

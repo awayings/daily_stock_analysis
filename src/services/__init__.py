@@ -14,6 +14,8 @@ from src.services.history_service import HistoryService
 from src.services.stock_service import StockService
 from src.services.task_service import TaskService, get_task_service
 from src.services.portfolio_service import PortfolioService
+from src.services.daily_sync_service import DailyStockSyncService
+from src.services.validation_service import DataValidationService
 
 __all__ = [
     "AnalysisService",
@@ -23,4 +25,6 @@ __all__ = [
     "TaskService",
     "get_task_service",
     "PortfolioService",
+    "DailyStockSyncService",
+    "DataValidationService",
 ]

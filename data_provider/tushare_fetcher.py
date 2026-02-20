@@ -497,6 +497,76 @@ class TushareFetcher(BaseFetcher):
         
         return None
     
+    def get_daily_data_by_date(self, trade_date: str) -> Optional[pd.DataFrame]:
+        """
+        按日期批量获取全市场日线数据
+        
+        这是最高效的批量获取方式，一次请求可获取全市场 5000+ 只股票的数据
+        
+        Args:
+            trade_date: 交易日期，格式 'YYYYMMDD' 或 'YYYY-MM-DD'
+            
+        Returns:
+            全市场日线数据 DataFrame，包含 code, date, open, high, low, close, volume, amount, pct_chg 列
+            失败返回 None
+        """
+        if self._api is None:
+            logger.warning("Tushare API 未初始化，无法批量获取数据")
+            return None
+        
+        try:
+            self._check_rate_limit()
+            
+            trade_date_fmt = trade_date.replace('-', '')
+            
+            logger.info(f"[API调用] Tushare daily(trade_date={trade_date_fmt}) 批量获取全市场数据...")
+            import time as _time
+            api_start = _time.time()
+            
+            df = self._api.daily(trade_date=trade_date_fmt)
+            
+            api_elapsed = _time.time() - api_start
+            
+            if df is None or df.empty:
+                logger.warning(f"[API返回] Tushare 批量获取 {trade_date_fmt} 数据为空, 耗时 {api_elapsed:.2f}s")
+                return None
+            
+            logger.info(f"[API返回] Tushare 批量获取成功: {len(df)} 条记录, 耗时 {api_elapsed:.2f}s")
+            
+            df = df.copy()
+            
+            df['code'] = df['ts_code'].apply(lambda x: x.split('.')[0])
+            
+            column_mapping = {
+                'trade_date': 'date',
+                'vol': 'volume',
+            }
+            df = df.rename(columns=column_mapping)
+            
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'], format='%Y%m%d')
+            
+            if 'volume' in df.columns:
+                df['volume'] = df['volume'] * 100
+            
+            if 'amount' in df.columns:
+                df['amount'] = df['amount'] * 1000
+            
+            keep_cols = ['code'] + STANDARD_COLUMNS
+            existing_cols = [col for col in keep_cols if col in df.columns]
+            df = df[existing_cols]
+            
+            logger.info(f"[Tushare] 批量数据标准化完成: {len(df)} 条")
+            return df
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            if any(keyword in error_msg for keyword in ['quota', '配额', 'limit', '权限']):
+                logger.warning(f"Tushare 配额可能超限: {e}")
+                raise RateLimitError(f"Tushare 配额超限: {e}") from e
+            logger.error(f"[Tushare] 批量获取数据失败: {e}")
+            return None
+    
     def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
         """
         获取实时行情

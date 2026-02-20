@@ -10,7 +10,7 @@
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional, Dict, Any, List
 
 from src.repositories.stock_repo import StockRepository
@@ -160,13 +160,109 @@ class StockService:
             logger.error(f"获取历史数据失败: {e}", exc_info=True)
             return {"stock_code": stock_code, "period": period, "data": []}
     
+    def get_realtime_quote_from_db(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        从数据库获取股票实时行情（优先数据库，回退到外部API）
+
+        Args:
+            stock_code: 股票代码
+
+        Returns:
+            实时行情数据字典，格式与 get_realtime_quote() 一致
+        """
+        try:
+            latest_records = self.repo.get_latest(stock_code, days=2)
+
+            if latest_records:
+                today_data = latest_records[0]
+                yesterday_data = latest_records[1] if len(latest_records) > 1 else None
+
+                prev_close = None
+                change = None
+                if yesterday_data and yesterday_data.close:
+                    prev_close = yesterday_data.close
+                    if today_data.close:
+                        change = today_data.close - prev_close
+
+                update_time = datetime.now().isoformat()
+                if today_data.updated_at:
+                    update_time = today_data.updated_at.isoformat()
+                elif today_data.created_at:
+                    update_time = today_data.created_at.isoformat()
+
+                return {
+                    "stock_code": today_data.code,
+                    "stock_name": None,
+                    "current_price": today_data.close or 0.0,
+                    "change": change,
+                    "change_percent": today_data.pct_chg,
+                    "open": today_data.open,
+                    "high": today_data.high,
+                    "low": today_data.low,
+                    "prev_close": prev_close,
+                    "volume": today_data.volume,
+                    "amount": today_data.amount,
+                    "update_time": update_time,
+                }
+
+            logger.info(f"数据库无 {stock_code} 数据，从外部API获取")
+            quote = self.get_realtime_quote(stock_code)
+
+            if quote:
+                self._save_quote_to_db(quote)
+
+            return quote
+
+        except Exception as e:
+            logger.error(f"从数据库获取实时行情失败: {e}", exc_info=True)
+            return None
+
+    def _save_quote_to_db(self, quote: Dict[str, Any]) -> bool:
+        """
+        将行情数据保存到数据库
+
+        Args:
+            quote: 行情数据字典
+
+        Returns:
+            是否保存成功
+        """
+        try:
+            import pandas as pd
+
+            df = pd.DataFrame([{
+                'date': date.today(),
+                'open': quote.get('open'),
+                'high': quote.get('high'),
+                'low': quote.get('low'),
+                'close': quote.get('current_price'),
+                'volume': quote.get('volume'),
+                'amount': quote.get('amount'),
+                'pct_chg': quote.get('change_percent'),
+            }])
+
+            saved = self.repo.save_dataframe(
+                df,
+                code=quote.get('stock_code'),
+                data_source='realtime_quote_cache'
+            )
+
+            if saved > 0:
+                logger.info(f"已缓存 {quote.get('stock_code')} 行情数据到数据库")
+
+            return saved > 0
+
+        except Exception as e:
+            logger.error(f"保存行情数据到数据库失败: {e}", exc_info=True)
+            return False
+
     def _get_placeholder_quote(self, stock_code: str) -> Dict[str, Any]:
         """
         获取占位行情数据（用于测试）
-        
+
         Args:
             stock_code: 股票代码
-            
+
         Returns:
             占位行情数据
         """

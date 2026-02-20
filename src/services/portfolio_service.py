@@ -80,7 +80,7 @@ class PortfolioService:
             stock_service = self._get_stock_service()
             for h in holdings:
                 code = h['code']
-                name = stock_service.get_realtime_quote(code).get('stock_name') if stock_service else h.get('name', code)
+                name = stock_service.get_realtime_quote_from_db(code).get('stock_name') if stock_service else h.get('name', code)
                 entry_price = Decimal(str(h['entry_price']))
                 last_price = Decimal(str(h.get('last_price', h['entry_price'])))
 
@@ -232,7 +232,7 @@ class PortfolioService:
             raise ValueError("PORTFOLIO_005: 仓位占比总和必须等于100%")
 
         stock_service = self._get_stock_service()
-        name = stock_service.get_realtime_quote(code).get('stock_name') if stock_service else code
+        name = stock_service.get_realtime_quote_from_db(code).get('stock_name') if stock_service else code
 
         if last_price is None:
             last_price = entry_price
@@ -319,7 +319,7 @@ class PortfolioService:
         stock_service = self._get_stock_service()
 
         if price_type == 'current':
-            quote = stock_service.get_realtime_quote(holding.code) if stock_service else None
+            quote = stock_service.get_realtime_quote_from_db(holding.code) if stock_service else None
             if not quote:
                 raise ValueError("CLOSE_004: 无法获取当前收盘价")
             close_price = Decimal(str(quote['current_price']))
@@ -413,7 +413,7 @@ class PortfolioService:
                 skipped += 1
                 continue
 
-            name = stock_service.get_realtime_quote(code).get('stock_name') if stock_service else h.get('name', code)
+            name = stock_service.get_realtime_quote_from_db(code).get('stock_name') if stock_service else h.get('name', code)
 
             holding = self.repo.add_holding(
                 portfolio_id=portfolio_id,
@@ -644,7 +644,7 @@ class PortfolioService:
         current_prices = {}
         for h in holdings:
             if not h.is_closed:
-                quote = stock_service.get_realtime_quote(h.code) if stock_service else None
+                quote = stock_service.get_realtime_quote_from_db(h.code) if stock_service else None
                 if quote:
                     current_price = Decimal(str(quote['current_price']))
                     current_prices[h.code] = current_price
@@ -728,7 +728,7 @@ class PortfolioService:
 
         holdings_data = []
         for h in holdings:
-            quote = stock_service.get_realtime_quote(h.code) if stock_service else None
+            quote = stock_service.get_realtime_quote_from_db(h.code) if stock_service else None
             current_price = Decimal(str(quote['current_price'])) if quote else h.entry_price
 
             pnl_pct = ((current_price / h.entry_price - 1) * 100) if h.entry_price > 0 else Decimal('0')
@@ -766,7 +766,7 @@ class PortfolioService:
         """构建持仓响应"""
         stock_service = self._get_stock_service()
 
-        quote = stock_service.get_realtime_quote(holding.code) if stock_service else None
+        quote = stock_service.get_realtime_quote_from_db(holding.code) if stock_service else None
         current_price = Decimal(str(quote['current_price'])) if quote else holding.last_price
 
         pnl_pct = ((current_price / holding.last_price - 1) * 100) if holding.last_price > 0 else Decimal('0')
@@ -796,7 +796,7 @@ class PortfolioService:
         active_holdings = [h for h in holdings if not h.is_closed]
 
         for h in active_holdings:
-            quote = stock_service.get_realtime_quote(h.code) if stock_service else None
+            quote = stock_service.get_realtime_quote_from_db(h.code) if stock_service else None
             current_price = Decimal(str(quote['current_price'])) if quote else h.last_price
 
             pnl_pct = ((current_price / h.last_price - 1) * 100) if h.last_price > 0 else Decimal('0')

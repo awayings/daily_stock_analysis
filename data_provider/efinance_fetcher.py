@@ -819,6 +819,121 @@ class EfinanceFetcher(BaseFetcher):
             logger.error(f"[efinance] 获取板块排行失败: {e}")
             return None
     
+    def get_stock_list(self) -> Optional[pd.DataFrame]:
+        """
+        获取股票列表
+        
+        使用 efinance 的 get_realtime_quotes() 获取全市场股票列表
+        
+        Returns:
+            包含 code, name 列的 DataFrame，失败返回 None
+        """
+        import efinance as ef
+        
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+            
+            logger.info("[API调用] ef.stock.get_realtime_quotes() 获取股票列表...")
+            import time as _time
+            api_start = _time.time()
+            
+            df = ef.stock.get_realtime_quotes()
+            
+            api_elapsed = _time.time() - api_start
+            logger.info(f"[API返回] ef.stock.get_realtime_quotes 成功: 返回 {len(df) if df is not None else 0} 只股票, 耗时 {api_elapsed:.2f}s")
+            
+            if df is not None and not df.empty:
+                code_col = '股票代码' if '股票代码' in df.columns else 'code'
+                name_col = '股票名称' if '股票名称' in df.columns else 'name'
+                
+                result = df[[code_col, name_col]].copy()
+                result = result.rename(columns={code_col: 'code', name_col: 'name'})
+                
+                result['code'] = result['code'].astype(str).str.zfill(6)
+                
+                result = result[result['code'].str.match(r'^\d{6}$')]
+                
+                logger.info(f"[efinance] 获取股票列表成功: {len(result)} 条")
+                return result
+            
+        except Exception as e:
+            logger.error(f"[efinance] 获取股票列表失败: {e}")
+        
+        return None
+    
+    def get_daily_data_batch(
+        self,
+        stock_codes: List[str],
+        start_date: str,
+        end_date: str,
+        batch_size: int = 50
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        批量获取多只股票历史数据
+        
+        使用 efinance 的 get_quote_history 批量接口，支持传入股票列表
+        
+        Args:
+            stock_codes: 股票代码列表
+            start_date: 开始日期，格式 'YYYY-MM-DD'
+            end_date: 结束日期，格式 'YYYY-MM-DD'
+            batch_size: 每批获取的股票数量（默认 50，避免请求过大）
+            
+        Returns:
+            {股票代码: DataFrame} 字典，每个 DataFrame 包含标准化后的日线数据
+        """
+        import efinance as ef
+        
+        result: Dict[str, pd.DataFrame] = {}
+        
+        beg_date = start_date.replace('-', '')
+        end_date_fmt = end_date.replace('-', '')
+        
+        total = len(stock_codes)
+        
+        for i in range(0, total, batch_size):
+            batch = stock_codes[i:i + batch_size]
+            batch_num = i // batch_size + 1
+            total_batches = (total + batch_size - 1) // batch_size
+            
+            logger.info(f"[API调用] ef.stock.get_quote_history 批量获取 (批次 {batch_num}/{total_batches}, {len(batch)} 只股票)...")
+            
+            try:
+                self._set_random_user_agent()
+                self._enforce_rate_limit()
+                
+                import time as _time
+                api_start = _time.time()
+                
+                df_dict = ef.stock.get_quote_history(
+                    stock_codes=batch,
+                    beg=beg_date,
+                    end=end_date_fmt,
+                    klt=101,
+                    fqt=1
+                )
+                
+                api_elapsed = _time.time() - api_start
+                logger.info(f"[API返回] 批次 {batch_num} 完成, 耗时 {api_elapsed:.2f}s")
+                
+                if df_dict is not None:
+                    for code, df in df_dict.items():
+                        if df is not None and not df.empty:
+                            normalized_df = self._normalize_data(df, code)
+                            result[code] = normalized_df
+                
+            except Exception as e:
+                logger.error(f"[API错误] 批次 {batch_num} 获取失败: {e}")
+                for code in batch:
+                    if code not in result:
+                        result[code] = pd.DataFrame()
+        
+        success_count = sum(1 for v in result.values() if not v.empty)
+        logger.info(f"[efinance] 批量获取完成: 成功 {success_count}/{total} 只股票")
+        
+        return result
+    
     def get_base_info(self, stock_code: str) -> Optional[Dict[str, Any]]:
         """
         获取股票基本信息

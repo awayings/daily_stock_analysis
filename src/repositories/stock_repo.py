@@ -159,3 +159,84 @@ class StockRepository:
                 .limit(eval_window_days)
             ).scalars().all()
             return list(rows)
+
+    def get_all_stock_codes(self) -> List[str]:
+        """
+        获取所有不重复的股票代码
+        
+        Returns:
+            股票代码列表
+        """
+        try:
+            with self.db.get_session() as session:
+                from sqlalchemy import func
+                result = session.execute(
+                    select(StockDaily.code).distinct()
+                ).scalars().all()
+                return list(result)
+        except Exception as e:
+            logger.error(f"获取股票代码列表失败: {e}")
+            return []
+
+    def get_latest_date(self) -> Optional[date]:
+        """
+        获取所有股票中最新的数据日期
+        
+        Returns:
+            最新日期，如果没有数据则返回 None
+        """
+        try:
+            with self.db.get_session() as session:
+                row = session.execute(
+                    select(StockDaily.date)
+                    .order_by(desc(StockDaily.date))
+                    .limit(1)
+                ).scalars().first()
+                return row
+        except Exception as e:
+            logger.error(f"获取最新日期失败: {e}")
+            return None
+
+    def count_records_by_date(self, target_date: date) -> int:
+        """
+        统计指定日期的记录数
+        
+        Args:
+            target_date: 目标日期
+            
+        Returns:
+            记录数量
+        """
+        try:
+            with self.db.get_session() as session:
+                from sqlalchemy import func
+                result = session.execute(
+                    select(func.count()).where(StockDaily.date == target_date)
+                ).scalar()
+                return result or 0
+        except Exception as e:
+            logger.error(f"统计日期记录数失败: {e}")
+            return 0
+
+    def get_latest_quote(self, code: str) -> Optional[StockDaily]:
+        """
+        获取指定股票的最新行情
+        
+        Args:
+            code: 股票代码
+            
+        Returns:
+            最新的 StockDaily 对象，如果没有数据则返回 None
+        """
+        try:
+            with self.db.get_session() as session:
+                row = session.execute(
+                    select(StockDaily)
+                    .where(StockDaily.code == code)
+                    .order_by(desc(StockDaily.date))
+                    .limit(1)
+                ).scalars().first()
+                return row
+        except Exception as e:
+            logger.error(f"获取最新行情失败: {e}")
+            return None

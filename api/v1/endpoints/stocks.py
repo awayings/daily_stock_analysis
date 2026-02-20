@@ -7,9 +7,11 @@
 职责：
 1. 提供 GET /api/v1/stocks/{code}/quote 实时行情接口
 2. 提供 GET /api/v1/stocks/{code}/history 历史行情接口
+3. 提供 POST /api/v1/stocks/sync-daily 每日同步接口
 """
 
 import logging
+from datetime import date, datetime
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -17,9 +19,14 @@ from api.v1.schemas.stocks import (
     StockQuote,
     StockHistoryResponse,
     KLineData,
+    SyncDailyResponse,
 )
 from api.v1.schemas.common import ErrorResponse
 from src.services.stock_service import StockService
+from src.services.daily_sync_service import DailyStockSyncService
+from src.services.validation_service import DataValidationService
+from src.storage import DatabaseManager
+from src.notification import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -172,5 +179,114 @@ def get_stock_history(
             detail={
                 "error": "internal_error",
                 "message": f"获取历史行情失败: {str(e)}"
+            }
+        )
+
+
+@router.post(
+    "/sync-daily",
+    response_model=SyncDailyResponse,
+    responses={
+        200: {"description": "同步完成"},
+        207: {"description": "同步部分成功"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="执行每日数据同步",
+    description="同步所有股票的日线数据并执行数据验证"
+)
+def sync_daily(
+    sync_date: str = Query(None, description="同步日期（YYYY-MM-DD 格式，默认今天）", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    notify: bool = Query(False, description="是否发送钉钉通知")
+) -> SyncDailyResponse:
+    """
+    执行每日数据同步
+    
+    同步所有股票的日线数据，执行数据验证，并可选发送钉钉通知
+    
+    Args:
+        sync_date: 同步日期（可选，默认今天）
+        notify: 是否发送钉钉通知（默认 False）
+        
+    Returns:
+        SyncDailyResponse: 同步结果统计
+    """
+    try:
+        target_date = None
+        if sync_date:
+            try:
+                target_date = datetime.strptime(sync_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "invalid_date",
+                        "message": f"日期格式错误: {sync_date}，应为 YYYY-MM-DD"
+                    }
+                )
+        
+        if target_date is None:
+            target_date = date.today()
+        
+        logger.info(f"开始执行每日同步，日期: {target_date}，通知: {notify}")
+        
+        sync_service = DailyStockSyncService()
+        sync_result = sync_service.sync_all_stocks(sync_date=target_date)
+        
+        validation_service = DataValidationService()
+        validation_result = validation_service.validate(
+            sync_date=target_date,
+            sync_stats=sync_result
+        )
+        
+        db = DatabaseManager.get_instance()
+        db.save_sync_statistics({
+            "sync_date": target_date,
+            "total_stocks": sync_result.get("total", 0),
+            "success_count": sync_result.get("success", 0),
+            "failed_count": sync_result.get("failed", 0),
+            "data_sources": sync_result.get("data_sources", ""),
+            "validation_passed": validation_result.get("passed", False),
+            "validation_details": validation_result
+        })
+        
+        if notify:
+            try:
+                notification_service = NotificationService()
+                title = f"每日数据同步完成 - {target_date}"
+                content = (
+                    f"### {title}\n\n"
+                    f"- **同步日期**: {target_date}\n"
+                    f"- **总股票数**: {sync_result.get('total', 0)}\n"
+                    f"- **成功数**: {sync_result.get('success', 0)}\n"
+                    f"- **失败数**: {sync_result.get('failed', 0)}\n"
+                    f"- **数据源**: {sync_result.get('data_sources', 'N/A')}\n"
+                    f"- **验证结果**: {'通过' if validation_result.get('passed', False) else '失败'}\n"
+                    f"- **验证详情**: {validation_result.get('validation_details', 'N/A')}"
+                )
+                notification_service.send_dingtalk_message(title, content)
+                logger.info("钉钉通知发送成功")
+            except Exception as e:
+                logger.warning(f"钉钉通知发送失败: {e}")
+        
+        response = SyncDailyResponse(
+            total_count=sync_result.get("total", 0),
+            success_count=sync_result.get("success", 0),
+            failed_count=sync_result.get("failed", 0),
+            data_sources=sync_result.get("data_sources", ""),
+            validation_passed=validation_result.get("passed", False),
+            validation_details=validation_result
+        )
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"每日同步失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "internal_error",
+                "message": f"每日同步失败: {str(e)}"
             }
         )

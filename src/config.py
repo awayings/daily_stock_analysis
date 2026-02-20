@@ -237,6 +237,10 @@ class Config:
     dingtalk_app_key: Optional[str] = None      # 应用 AppKey
     dingtalk_app_secret: Optional[str] = None   # 应用 AppSecret
     dingtalk_stream_enabled: bool = False       # 是否启用 Stream 模式（无需公网IP）
+
+    # 钉钉 Webhook 通知（用于同步结果推送）
+    dingtalk_webhook_url: Optional[str] = None  # Webhook URL
+    dingtalk_secret: Optional[str] = None       # 签名密钥（可选）
     
     # 企业微信机器人（回调模式）
     wecom_corpid: Optional[str] = None              # 企业 ID
@@ -450,6 +454,9 @@ class Config:
             dingtalk_app_key=os.getenv('DINGTALK_APP_KEY'),
             dingtalk_app_secret=os.getenv('DINGTALK_APP_SECRET'),
             dingtalk_stream_enabled=os.getenv('DINGTALK_STREAM_ENABLED', 'false').lower() == 'true',
+            # 钉钉 Webhook 通知
+            dingtalk_webhook_url=os.getenv('DINGTALK_WEBHOOK_URL'),
+            dingtalk_secret=os.getenv('DINGTALK_SECRET'),
             # 企业微信机器人
             wecom_corpid=os.getenv('WECOM_CORPID'),
             wecom_token=os.getenv('WECOM_TOKEN'),
@@ -601,7 +608,8 @@ class Config:
             self.serverchan3_sendkey or
             (self.custom_webhook_urls and self.custom_webhook_bearer_token) or
             (self.discord_bot_token and self.discord_main_channel_id) or
-            self.discord_webhook_url
+            self.discord_webhook_url or
+            self.dingtalk_webhook_url
         )
         if not has_notification:
             warnings.append("提示：未配置通知渠道，将不发送推送通知")

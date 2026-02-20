@@ -62,6 +62,7 @@ class NotificationChannel(Enum):
     CUSTOM = "custom"      # 自定义 Webhook
     DISCORD = "discord"    # Discord 机器人 (Bot)
     ASTRBOT = "astrbot"
+    DINGTALK = "dingtalk"  # 钉钉 Webhook
     UNKNOWN = "unknown"    # 未知
 
 
@@ -111,6 +112,7 @@ class ChannelDetector:
             NotificationChannel.CUSTOM: "自定义Webhook",
             NotificationChannel.DISCORD: "Discord机器人",
             NotificationChannel.ASTRBOT: "ASTRBOT机器人",
+            NotificationChannel.DINGTALK: "钉钉",
             NotificationChannel.UNKNOWN: "未知渠道",
         }
         return names.get(channel, "未知渠道")
@@ -195,6 +197,10 @@ class NotificationService:
             'astrbot_url': getattr(config, 'astrbot_url', None),
             'astrbot_token': getattr(config, 'astrbot_token', None),
         }
+
+        # 钉钉 Webhook 配置
+        self._dingtalk_webhook_url = getattr(config, 'dingtalk_webhook_url', None)
+        self._dingtalk_secret = getattr(config, 'dingtalk_secret', None)
         
         # 消息长度限制（字节）
         self._feishu_max_bytes = getattr(config, 'feishu_max_bytes', 20000)
@@ -267,6 +273,9 @@ class NotificationService:
         # AstrBot
         if self._is_astrbot_configured():
             channels.append(NotificationChannel.ASTRBOT)
+        # 钉钉 Webhook
+        if self._is_dingtalk_configured():
+            channels.append(NotificationChannel.DINGTALK)
         return channels
     
     def _is_telegram_configured(self) -> bool:
@@ -285,6 +294,10 @@ class NotificationService:
         # 只要配置了 URL，即视为可用
         url_ok = bool(self._astrbot_config['astrbot_url'])
         return url_ok
+
+    def _is_dingtalk_configured(self) -> bool:
+        """检查钉钉 Webhook 配置是否完整"""
+        return bool(self._dingtalk_webhook_url)
 
     def _is_email_configured(self) -> bool:
         """检查邮件配置是否完整（只需邮箱和授权码）"""
@@ -3161,6 +3174,215 @@ class NotificationService:
             logger.error(f"AstrBot 发送异常: {e}")
             return False
 
+    def send_dingtalk_message(self, title: str, content: str) -> bool:
+        """
+        推送消息到钉钉 Webhook
+
+        钉钉机器人 Webhook API 格式：
+        POST {webhook_url}&timestamp={timestamp}&sign={sign}
+        {
+            "msgtype": "markdown",
+            "markdown": {
+                "title": "消息标题",
+                "text": "消息内容（Markdown 格式）"
+            }
+        }
+
+        钉钉签名算法：
+        1. timestamp = 当前时间戳（毫秒）
+        2. string_to_sign = "{timestamp}\\n{secret}"
+        3. hmac_code = hmac_sha256(secret, string_to_sign)
+        4. sign = urlsafe_base64_encode(hmac_code)
+
+        Args:
+            title: 消息标题
+            content: 消息内容（Markdown 格式）
+
+        Returns:
+            是否发送成功
+        """
+        import urllib.parse
+
+        if not self._dingtalk_webhook_url:
+            logger.warning("钉钉 Webhook URL 未配置，跳过推送")
+            return False
+
+        webhook_url = self._dingtalk_webhook_url
+
+        # 如果配置了签名密钥，计算签名
+        if self._dingtalk_secret:
+            try:
+                timestamp = str(round(time.time() * 1000))
+                string_to_sign = f"{timestamp}\n{self._dingtalk_secret}"
+                hmac_code = hmac.new(
+                    self._dingtalk_secret.encode('utf-8'),
+                    string_to_sign.encode('utf-8'),
+                    hashlib.sha256
+                ).digest()
+                sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
+
+                # 拼接签名参数到 URL
+                if '?' in webhook_url:
+                    webhook_url = f"{webhook_url}&timestamp={timestamp}&sign={sign}"
+                else:
+                    webhook_url = f"{webhook_url}?timestamp={timestamp}&sign={sign}"
+            except Exception as e:
+                logger.error(f"钉钉签名计算失败: {e}")
+                return False
+
+        try:
+            payload = {
+                "msgtype": "markdown",
+                "markdown": {
+                    "title": title,
+                    "text": content
+                }
+            }
+
+            response = requests.post(webhook_url, json=payload, timeout=10)
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('errcode') == 0:
+                    logger.info("钉钉消息发送成功")
+                    return True
+                else:
+                    error_msg = result.get('errmsg', '未知错误')
+                    logger.error(f"钉钉返回错误: {error_msg}")
+                    return False
+            else:
+                logger.error(f"钉钉请求失败: HTTP {response.status_code}")
+                return False
+
+        except Exception as e:
+            logger.error(f"发送钉钉消息失败: {e}")
+            return False
+
+    def format_sync_report(self, sync_stats: Dict, validation_result: Dict) -> str:
+        """
+        格式化每日同步报告
+
+        Args:
+            sync_stats: 同步统计数据，包含：
+                - total: 总股票数
+                - success: 成功数
+                - failed: 失败数
+                - new_stocks: 新增股票数
+                - updated_stocks: 更新股票数
+            validation_result: 验证结果，包含：
+                - is_valid: 是否通过验证
+                - errors: 错误列表
+                - warnings: 警告列表
+
+        Returns:
+            Markdown 格式的同步报告
+        """
+        date_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        lines = [
+            f"## 📊 每日数据同步报告",
+            f"",
+            f"**同步时间**: {date_str}",
+            f"",
+            f"### 同步统计",
+            f"",
+            f"| 指标 | 数量 |",
+            f"| --- | --- |",
+            f"| 总股票数 | {sync_stats.get('total', 0)} |",
+            f"| 成功同步 | {sync_stats.get('success', 0)} |",
+            f"| 同步失败 | {sync_stats.get('failed', 0)} |",
+            f"| 新增股票 | {sync_stats.get('new_stocks', 0)} |",
+            f"| 更新股票 | {sync_stats.get('updated_stocks', 0)} |",
+        ]
+
+        if validation_result:
+            is_valid = validation_result.get('is_valid', True)
+            errors = validation_result.get('errors', [])
+            warnings = validation_result.get('warnings', [])
+
+            status_emoji = "✅" if is_valid else "❌"
+            lines.extend([
+                f"",
+                f"### 数据验证",
+                f"",
+                f"**验证状态**: {status_emoji} {'通过' if is_valid else '未通过'}",
+            ])
+
+            if errors:
+                lines.append(f"")
+                lines.append(f"**错误 ({len(errors)})**:")
+                for err in errors[:5]:
+                    lines.append(f"- {err}")
+                if len(errors) > 5:
+                    lines.append(f"- ... 还有 {len(errors) - 5} 个错误")
+
+            if warnings:
+                lines.append(f"")
+                lines.append(f"**警告 ({len(warnings)})**:")
+                for warn in warnings[:5]:
+                    lines.append(f"- {warn}")
+                if len(warnings) > 5:
+                    lines.append(f"- ... 还有 {len(warnings) - 5} 个警告")
+
+        return "\n".join(lines)
+
+    def format_validation_alert(self, validation_result: Dict) -> str:
+        """
+        格式化数据验证告警
+
+        Args:
+            validation_result: 验证结果，包含：
+                - is_valid: 是否通过验证
+                - errors: 错误列表
+                - warnings: 警告列表
+                - details: 详细信息
+
+        Returns:
+            Markdown 格式的验证告警
+        """
+        date_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        is_valid = validation_result.get('is_valid', True)
+        errors = validation_result.get('errors', [])
+        warnings = validation_result.get('warnings', [])
+
+        alert_emoji = "🚨" if not is_valid else "⚠️"
+        status_text = "数据验证失败" if not is_valid else "数据验证警告"
+
+        lines = [
+            f"## {alert_emoji} {status_text}",
+            f"",
+            f"**告警时间**: {date_str}",
+            f"",
+        ]
+
+        if errors:
+            lines.extend([
+                f"### ❌ 错误 ({len(errors)})",
+                f"",
+            ])
+            for err in errors:
+                lines.append(f"- {err}")
+
+        if warnings:
+            lines.extend([
+                f"",
+                f"### ⚠️ 警告 ({len(warnings)})",
+                f"",
+            ])
+            for warn in warnings:
+                lines.append(f"- {warn}")
+
+        details = validation_result.get('details')
+        if details:
+            lines.extend([
+                f"",
+                f"### 📋 详细信息",
+                f"",
+                f"```\n{details}\n```",
+            ])
+
+        return "\n".join(lines)
+
     def _should_use_image_for_channel(
         self, channel: NotificationChannel, image_bytes: Optional[bytes]
     ) -> bool:
@@ -3284,6 +3506,10 @@ class NotificationService:
                     result = self.send_to_discord(content)
                 elif channel == NotificationChannel.ASTRBOT:
                     result = self.send_to_astrbot(content)
+                elif channel == NotificationChannel.DINGTALK:
+                    date_str = datetime.now().strftime('%Y-%m-%d')
+                    title = f"📈 股票分析报告 - {date_str}"
+                    result = self.send_dingtalk_message(title, content)
                 else:
                     logger.warning(f"不支持的通知渠道: {channel}")
                     result = False
