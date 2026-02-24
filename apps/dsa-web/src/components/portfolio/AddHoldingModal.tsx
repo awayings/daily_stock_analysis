@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Button } from '../common';
+import { StockSearchInput } from './StockSearchInput';
+import type { StockSearchResult } from '../../api/stocks';
 
 interface AddHoldingModalProps {
   isOpen: boolean;
@@ -9,12 +11,26 @@ interface AddHoldingModalProps {
 
 export const AddHoldingModal: React.FC<AddHoldingModalProps> = ({ isOpen, onClose, onAdd }) => {
   const [code, setCode] = useState('');
+  const [stockName, setStockName] = useState('');
+  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [entryPrice, setEntryPrice] = useState('');
   const [lastPrice, setLastPrice] = useState('');
   const [weight, setWeight] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   if (!isOpen) return null;
+
+  const handleStockSelect = (selectedCode: string, stock?: StockSearchResult) => {
+    setCode(selectedCode);
+    if (stock) {
+      setStockName(stock.name || '');
+      if (stock.close) {
+        setCurrentPrice(stock.close);
+        setEntryPrice(stock.close.toFixed(2));
+        setLastPrice(stock.close.toFixed(2));
+      }
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,6 +45,8 @@ export const AddHoldingModal: React.FC<AddHoldingModalProps> = ({ isOpen, onClos
         weight: parseFloat(weight),
       });
       setCode('');
+      setStockName('');
+      setCurrentPrice(null);
       setEntryPrice('');
       setLastPrice('');
       setWeight('');
@@ -53,14 +71,14 @@ export const AddHoldingModal: React.FC<AddHoldingModalProps> = ({ isOpen, onClos
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           <div>
             <label className="block text-xs text-secondary mb-1.5">股票代码 *</label>
-            <input
-              type="text"
+            <StockSearchInput
               value={code}
-              onChange={(e) => setCode(e.target.value.toUpperCase())}
-              placeholder="例如: 600519"
-              className="input-terminal w-full"
-              required
+              onChange={handleStockSelect}
+              placeholder="搜索股票代码或名称..."
             />
+            {stockName && (
+              <p className="mt-1 text-xs text-muted">{stockName}</p>
+            )}
           </div>
 
           <div>
@@ -72,11 +90,14 @@ export const AddHoldingModal: React.FC<AddHoldingModalProps> = ({ isOpen, onClos
                 step="0.01"
                 value={entryPrice}
                 onChange={(e) => setEntryPrice(e.target.value)}
-                placeholder="0.00"
+                placeholder={currentPrice ? `当前价: ¥${currentPrice.toFixed(2)}` : "0.00"}
                 className="input-terminal w-full pl-7"
                 required
               />
             </div>
+            {currentPrice && (
+              <p className="mt-1 text-xs text-muted">当前价格: ¥{currentPrice.toFixed(2)}</p>
+            )}
           </div>
 
           <div>

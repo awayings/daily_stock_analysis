@@ -2,10 +2,13 @@ import type React from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/common';
+import { StockSearchInput } from '../components/portfolio';
+import type { StockSearchResult } from '../api/stocks';
 import { usePortfolioStore } from '../stores';
 
 interface HoldingFormData {
   code: string;
+  name: string;
   entryPrice: string;
   weight: string;
 }
@@ -20,17 +23,26 @@ const PortfolioCreatePage: React.FC = () => {
   const [currency, setCurrency] = useState('CNY');
   const [holdings, setHoldings] = useState<HoldingFormData[]>([]);
   const [showAddHolding, setShowAddHolding] = useState(false);
-  const [newHolding, setNewHolding] = useState<HoldingFormData>({ code: '', entryPrice: '', weight: '' });
+  const [newHolding, setNewHolding] = useState<HoldingFormData>({ code: '', name: '', entryPrice: '', weight: '' });
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const totalWeight = holdings.reduce((sum, h) => sum + (parseFloat(h.weight) || 0), 0);
   const isWeightValid = totalWeight <= 100;
 
+  const handleStockSelect = (code: string, stock?: StockSearchResult) => {
+    setNewHolding({
+      ...newHolding,
+      code,
+      name: stock?.name || '',
+      entryPrice: stock?.close ? stock.close.toFixed(2) : newHolding.entryPrice,
+    });
+  };
+
   const handleAddHolding = () => {
     if (!newHolding.code || !newHolding.entryPrice || !newHolding.weight) return;
 
     setHoldings([...holdings, { ...newHolding }]);
-    setNewHolding({ code: '', entryPrice: '', weight: '' });
+    setNewHolding({ code: '', name: '', entryPrice: '', weight: '' });
     setShowAddHolding(false);
   };
 
@@ -141,8 +153,8 @@ const PortfolioCreatePage: React.FC = () => {
                     step="0.01"
                     value={initialCapital}
                     onChange={(e) => setInitialCapital(e.target.value)}
-                    placeholder="100000.00"
-                    className="input-terminal flex-1"
+                    placeholder="1000000.00"
+                    className="input-terminal flex-1 min-w-[180px]"
                   />
                   <select
                     value={currency}
@@ -183,13 +195,17 @@ const PortfolioCreatePage: React.FC = () => {
 
               {showAddHolding && (
                 <div className="p-3 bg-elevated rounded-lg space-y-3">
-                  <input
-                    type="text"
-                    value={newHolding.code}
-                    onChange={(e) => setNewHolding({ ...newHolding, code: e.target.value.toUpperCase() })}
-                    placeholder="搜索股票代码或名称..."
-                    className="input-terminal w-full"
-                  />
+                  <div>
+                    <label className="block text-xs text-muted mb-1">股票代码</label>
+                    <StockSearchInput
+                      value={newHolding.code}
+                      onChange={handleStockSelect}
+                      placeholder="搜索股票代码或名称..."
+                    />
+                    {newHolding.name && (
+                      <p className="mt-1 text-xs text-muted">{newHolding.name}</p>
+                    )}
+                  </div>
                   <div className="flex gap-2">
                     <div className="flex-1">
                       <label className="block text-xs text-muted mb-1">建仓价格</label>
@@ -241,6 +257,7 @@ const PortfolioCreatePage: React.FC = () => {
                     <thead>
                       <tr className="bg-elevated text-left">
                         <th className="px-3 py-2 text-xs font-medium text-secondary">代码</th>
+                        <th className="px-3 py-2 text-xs font-medium text-secondary">名称</th>
                         <th className="px-3 py-2 text-xs font-medium text-secondary">建仓价格</th>
                         <th className="px-3 py-2 text-xs font-medium text-secondary text-right">仓位占比</th>
                         <th className="px-3 py-2 text-xs font-medium text-center">操作</th>
@@ -250,6 +267,7 @@ const PortfolioCreatePage: React.FC = () => {
                       {holdings.map((holding, index) => (
                         <tr key={index} className="border-t border-white/5">
                           <td className="px-3 py-2 font-mono text-cyan">{holding.code}</td>
+                          <td className="px-3 py-2 text-secondary">{holding.name || '-'}</td>
                           <td className="px-3 py-2 font-mono text-secondary">¥{holding.entryPrice}</td>
                           <td className="px-3 py-2 font-mono text-right">{holding.weight}%</td>
                           <td className="px-3 py-2 text-center">

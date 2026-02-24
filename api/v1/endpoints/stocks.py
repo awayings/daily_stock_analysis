@@ -8,6 +8,7 @@
 1. 提供 GET /api/v1/stocks/{code}/quote 实时行情接口
 2. 提供 GET /api/v1/stocks/{code}/history 历史行情接口
 3. 提供 POST /api/v1/stocks/sync-daily 每日同步接口
+4. 提供 GET /api/v1/stocks/search 股票搜索接口
 """
 
 import logging
@@ -20,6 +21,8 @@ from api.v1.schemas.stocks import (
     StockHistoryResponse,
     KLineData,
     SyncDailyResponse,
+    StockSearchResponse,
+    StockSearchResult,
 )
 from api.v1.schemas.common import ErrorResponse
 from src.services.stock_service import StockService
@@ -27,10 +30,67 @@ from src.services.daily_sync_service import DailyStockSyncService
 from src.services.validation_service import DataValidationService
 from src.storage import DatabaseManager
 from src.notification import NotificationService
+from src.repositories.stock_repo import StockRepository
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get(
+    "/search",
+    response_model=StockSearchResponse,
+    responses={
+        200: {"description": "搜索结果"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="搜索股票",
+    description="通过股票代码或名称搜索股票（支持模糊匹配）"
+)
+def search_stocks(
+    keyword: str = Query(..., description="搜索关键词（股票代码或名称）", min_length=1),
+    limit: int = Query(20, ge=1, le=100, description="返回数量限制")
+) -> StockSearchResponse:
+    """
+    搜索股票
+    
+    通过股票代码或名称搜索股票，支持模糊匹配
+    
+    Args:
+        keyword: 搜索关键词
+        limit: 返回数量限制
+        
+    Returns:
+        StockSearchResponse: 搜索结果
+    """
+    try:
+        repo = StockRepository()
+        results = repo.search_stocks(keyword, limit)
+        
+        items = [
+            StockSearchResult(
+                code=item.get("code"),
+                name=item.get("name"),
+                close=item.get("close"),
+                date=item.get("date")
+            )
+            for item in results
+        ]
+        
+        return StockSearchResponse(
+            total=len(items),
+            items=items
+        )
+        
+    except Exception as e:
+        logger.error(f"搜索股票失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "internal_error",
+                "message": f"搜索股票失败: {str(e)}"
+            }
+        )
 
 
 @router.get(

@@ -240,3 +240,109 @@ class StockRepository:
         except Exception as e:
             logger.error(f"获取最新行情失败: {e}")
             return None
+
+    def search_stocks(self, keyword: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        搜索股票（支持代码和名称模糊匹配）
+        
+        从 stock_daily 表中获取最新时间戳的股票记录进行搜索
+        
+        Args:
+            keyword: 搜索关键词（股票代码或名称）
+            limit: 返回数量限制
+            
+        Returns:
+            匹配的股票列表，每个元素包含 code, name, close, date
+        """
+        try:
+            from sqlalchemy import func, or_, literal_column
+            from sqlalchemy.sql import text
+            
+            with self.db.get_session() as session:
+                result = session.execute(text("""
+                    SELECT date FROM stock_daily
+                    GROUP BY date
+                    HAVING COUNT(DISTINCT code) >= 100
+                    ORDER BY date DESC
+                    LIMIT 1
+                """)).scalar()
+                
+                if not result:
+                    result = session.execute(
+                        select(func.max(StockDaily.date))
+                    ).scalar()
+                
+                if not result:
+                    return []
+                
+                latest_date = result
+                keyword_upper = keyword.upper()
+                keyword_like = f"%{keyword}%"
+                
+                query = text("""
+                    SELECT DISTINCT code, close, date
+                    FROM stock_daily
+                    WHERE date = :latest_date
+                    AND (
+                        code LIKE :keyword_prefix
+                        OR code LIKE :keyword_contains
+                    )
+                    ORDER BY 
+                        CASE 
+                            WHEN code = :keyword_exact THEN 0
+                            WHEN code LIKE :keyword_prefix THEN 1
+                            ELSE 2
+                        END,
+                        code
+                    LIMIT :limit
+                """)
+                
+                results = session.execute(
+                    query,
+                    {
+                        "latest_date": latest_date,
+                        "keyword_prefix": f"{keyword_upper}%",
+                        "keyword_contains": keyword_like,
+                        "keyword_exact": keyword_upper,
+                        "limit": limit
+                    }
+                ).fetchall()
+                
+                stock_codes = [row[0] for row in results]
+                names = self._get_stock_names(stock_codes)
+                
+                result_list = []
+                for row in results:
+                    code = row[0]
+                    close = row[1]
+                    date = row[2]
+                    result_list.append({
+                        "code": code,
+                        "name": names.get(code),
+                        "close": float(close) if close else None,
+                        "date": date.isoformat() if date else None
+                    })
+                
+                return result_list
+                
+        except Exception as e:
+            logger.error(f"搜索股票失败: {e}")
+            return []
+
+    def _get_stock_names(self, codes: List[str]) -> Dict[str, str]:
+        """
+        批量获取股票名称
+        
+        Args:
+            codes: 股票代码列表
+            
+        Returns:
+            {股票代码: 股票名称} 字典
+        """
+        try:
+            from data_provider.base import DataFetcherManager
+            manager = DataFetcherManager()
+            return manager.batch_get_stock_names(codes)
+        except Exception as e:
+            logger.warning(f"获取股票名称失败: {e}")
+            return {}

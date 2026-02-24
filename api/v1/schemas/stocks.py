@@ -143,3 +143,40 @@ class SyncDailyResponse(BaseModel):
                 }
             }
         }
+
+
+class StockSearchResult(BaseModel):
+    """股票搜索结果"""
+
+    code: str = Field(..., description="股票代码")
+    name: Optional[str] = Field(None, description="股票名称")
+    close: Optional[float] = Field(None, description="最新收盘价")
+    date: Optional[str] = Field(None, description="数据日期")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "code": "600519",
+                "name": "贵州茅台",
+                "close": 1800.00,
+                "date": "2024-01-15"
+            }
+        }
+
+
+class StockSearchResponse(BaseModel):
+    """股票搜索响应"""
+
+    total: int = Field(..., description="总结果数")
+    items: List[StockSearchResult] = Field(default_factory=list, description="搜索结果列表")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "total": 2,
+                "items": [
+                    {"code": "600519", "name": "贵州茅台", "close": 1800.00, "date": "2024-01-15"},
+                    {"code": "000858", "name": "五粮液", "close": 150.00, "date": "2024-01-15"}
+                ]
+            }
+        }

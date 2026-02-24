@@ -8,3 +8,4 @@ export { SummaryCard } from './SummaryCard';
 export { PerformanceChart } from './PerformanceChart';
 export { HistoryPanel } from './HistoryPanel';
 export { PerformancePanel } from './PerformancePanel';
+export { StockSearchInput } from './StockSearchInput';
