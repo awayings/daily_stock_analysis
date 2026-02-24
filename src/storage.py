@@ -99,6 +99,8 @@ class StockDaily(SQLITE_BASE):
     date = Column(Date, nullable=False, primary_key=True)  # 交易日期
     id = Column(BigInteger, nullable=False, autoincrement=True)  # 自增主键
     
+    name = Column(String(50))  # 股票中文名称（如 贵州茅台, 平安银行）
+    
     open = Column(Float)  # 开盘价
     high = Column(Float)  # 最高价
     low = Column(Float)  # 最低价
@@ -1265,7 +1267,8 @@ class DatabaseManager:
         self, 
         df: pd.DataFrame, 
         code: str,
-        data_source: str = "Unknown"
+        data_source: str = "Unknown",
+        name: str = None
     ) -> int:
         """
         保存日线数据到数据库
@@ -1278,6 +1281,7 @@ class DatabaseManager:
             df: 包含日线数据的 DataFrame
             code: 股票代码
             data_source: 数据来源名称
+            name: 股票中文名称（可选）
             
         Returns:
             新增/更新的记录数
@@ -1302,6 +1306,7 @@ class DatabaseManager:
                     record = StockDaily(
                         code=code,
                         date=row_date,
+                        name=name,
                         open=row.get('open'),
                         high=row.get('high'),
                         low=row.get('low'),
@@ -1329,6 +1334,7 @@ class DatabaseManager:
                         ).scalars().first()
                         
                         if existing:
+                            existing.name = name
                             existing.open = row.get('open')
                             existing.high = row.get('high')
                             existing.low = row.get('low')
@@ -1355,6 +1361,93 @@ class DatabaseManager:
                 raise
         
         return len(df) if self.is_doris else saved_count
+    
+    def save_daily_data_batch(
+        self,
+        df: pd.DataFrame,
+        data_source: str = "Unknown",
+        batch_size: int = 1000
+    ) -> int:
+        """
+        批量保存多只股票的日线数据
+        
+        适用于 Doris UNIQUE KEY 模型，直接 INSERT 即可，无需判断是否存在
+        
+        Args:
+            df: 包含多只股票日线数据的 DataFrame，必须包含 'code' 列
+            data_source: 数据来源名称
+            batch_size: 每批次保存的记录数（默认 1000）
+            
+        Returns:
+            保存的记录数
+        """
+        if df is None or df.empty:
+            logger.warning("批量保存数据为空，跳过")
+            return 0
+        
+        if 'code' not in df.columns:
+            logger.error("DataFrame 缺少 'code' 列")
+            return 0
+        
+        total_saved = 0
+        total_records = len(df)
+        
+        if self.is_doris:
+            for start_idx in range(0, total_records, batch_size):
+                batch_df = df.iloc[start_idx:start_idx + batch_size]
+                batch_records = []
+                
+                for _, row in batch_df.iterrows():
+                    row_date = row.get('date')
+                    if isinstance(row_date, str):
+                        row_date = datetime.strptime(row_date, '%Y-%m-%d').date()
+                    elif isinstance(row_date, datetime):
+                        row_date = row_date.date()
+                    elif isinstance(row_date, pd.Timestamp):
+                        row_date = row_date.date()
+                    
+                    record = StockDaily(
+                        code=row.get('code'),
+                        date=row_date,
+                        name=row.get('name'),
+                        open=row.get('open'),
+                        high=row.get('high'),
+                        low=row.get('low'),
+                        close=row.get('close'),
+                        volume=row.get('volume'),
+                        amount=row.get('amount'),
+                        pct_chg=row.get('pct_chg'),
+                        ma5=row.get('ma5'),
+                        ma10=row.get('ma10'),
+                        ma20=row.get('ma20'),
+                        volume_ratio=row.get('volume_ratio'),
+                        data_source=data_source,
+                    )
+                    batch_records.append(record)
+                
+                with self.get_session() as session:
+                    try:
+                        session.bulk_save_objects(batch_records)
+                        session.commit()
+                        total_saved += len(batch_records)
+                        logger.debug(f"批量保存进度: {total_saved}/{total_records}")
+                    except Exception as e:
+                        session.rollback()
+                        logger.error(f"批量保存失败 (批次 {start_idx}-{start_idx + batch_size}): {e}")
+                        raise
+            
+            logger.info(f"批量保存完成: 共 {total_saved} 条记录")
+            return total_saved
+        else:
+            stock_codes = df['code'].unique()
+            for code in stock_codes:
+                stock_df = df[df['code'] == code].copy()
+                name = stock_df['name'].iloc[0] if 'name' in stock_df.columns and not stock_df.empty else None
+                saved = self.save_daily_data(stock_df, code, data_source, name)
+                total_saved += saved
+            
+            logger.info(f"批量保存完成 (SQLite 模式): 共 {total_saved} 条记录")
+            return total_saved
     
     def get_analysis_context(
         self, 

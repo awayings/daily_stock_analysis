@@ -81,7 +81,8 @@ class StockRepository:
         self,
         df: pd.DataFrame,
         code: str,
-        data_source: str = "Unknown"
+        data_source: str = "Unknown",
+        name: str = None
     ) -> int:
         """
         保存 DataFrame 到数据库
@@ -90,12 +91,13 @@ class StockRepository:
             df: 包含日线数据的 DataFrame
             code: 股票代码
             data_source: 数据来源
+            name: 股票中文名称（可选）
             
         Returns:
             保存的记录数
         """
         try:
-            return self.db.save_daily_data(df, code, data_source)
+            return self.db.save_daily_data(df, code, data_source, name)
         except Exception as e:
             logger.error(f"保存日线数据失败: {e}")
             return 0
@@ -258,6 +260,8 @@ class StockRepository:
             from sqlalchemy import func, or_, literal_column
             from sqlalchemy.sql import text
             
+            logger.info(f"search_stocks called with keyword={keyword}, limit={limit}")
+            
             with self.db.get_session() as session:
                 result = session.execute(text("""
                     SELECT date FROM stock_daily
@@ -267,31 +271,39 @@ class StockRepository:
                     LIMIT 1
                 """)).scalar()
                 
+                logger.info(f"Latest date query result: {result}")
+                
                 if not result:
                     result = session.execute(
                         select(func.max(StockDaily.date))
                     ).scalar()
+                    logger.debug(f"Fallback max date: {result}")
                 
                 if not result:
+                    logger.warning("No date found in stock_daily table")
                     return []
                 
                 latest_date = result
                 keyword_upper = keyword.upper()
                 keyword_like = f"%{keyword}%"
                 
+                logger.info(f"Searching with latest_date={latest_date}, keyword_like={keyword_like}")
+                
                 query = text("""
-                    SELECT DISTINCT code, close, date
+                    SELECT DISTINCT code, name, close, date
                     FROM stock_daily
                     WHERE date = :latest_date
                     AND (
                         code LIKE :keyword_prefix
                         OR code LIKE :keyword_contains
+                        OR name LIKE :keyword_contains
                     )
                     ORDER BY 
                         CASE 
                             WHEN code = :keyword_exact THEN 0
                             WHEN code LIKE :keyword_prefix THEN 1
-                            ELSE 2
+                            WHEN name LIKE :keyword_prefix THEN 2
+                            ELSE 3
                         END,
                         code
                     LIMIT :limit
@@ -308,17 +320,22 @@ class StockRepository:
                     }
                 ).fetchall()
                 
-                stock_codes = [row[0] for row in results]
-                names = self._get_stock_names(stock_codes)
+                logger.info(f"Query returned {len(results)} results")
                 
                 result_list = []
                 for row in results:
                     code = row[0]
-                    close = row[1]
-                    date = row[2]
+                    name = row[1]
+                    close = row[2]
+                    date = row[3]
+                    
+                    if not name:
+                        names = self._get_stock_names([code])
+                        name = names.get(code)
+                    
                     result_list.append({
                         "code": code,
-                        "name": names.get(code),
+                        "name": name,
                         "close": float(close) if close else None,
                         "date": date.isoformat() if date else None
                     })
@@ -326,7 +343,7 @@ class StockRepository:
                 return result_list
                 
         except Exception as e:
-            logger.error(f"搜索股票失败: {e}")
+            logger.error(f"搜索股票失败: {e}", exc_info=True)
             return []
 
     def _get_stock_names(self, codes: List[str]) -> Dict[str, str]:

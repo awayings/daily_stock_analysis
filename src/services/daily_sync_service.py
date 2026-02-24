@@ -173,6 +173,8 @@ class DailyStockSyncService:
         """
         try:
             from data_provider.efinance_fetcher import EfinanceFetcher
+            from data_provider.base import DataFetcherManager
+            import pandas as pd
             
             fetcher = EfinanceFetcher()
             
@@ -182,6 +184,10 @@ class DailyStockSyncService:
                 return None
             
             logger.info(f"[批量同步] 尝试使用 Efinance 批量接口，共 {len(stock_codes)} 只股票...")
+            
+            logger.info("[批量同步] 批量获取股票名称...")
+            manager = DataFetcherManager()
+            stock_names = manager.batch_get_stock_names(stock_codes)
             
             start_date = (sync_date - timedelta(days=7)).strftime('%Y-%m-%d')
             end_date = sync_date.strftime('%Y-%m-%d')
@@ -197,25 +203,31 @@ class DailyStockSyncService:
                 logger.warning("[批量同步] Efinance 批量获取数据为空")
                 return None
             
-            success_count = 0
-            failed_count = 0
+            all_dfs = []
+            failed_codes = []
             
             for code, df in df_dict.items():
                 if df is not None and not df.empty:
-                    saved = self.repo.save_dataframe(df, code, "EfinanceFetcher")
-                    if saved > 0:
-                        success_count += 1
-                    else:
-                        failed_count += 1
+                    df['code'] = code
+                    df['name'] = stock_names.get(code)
+                    all_dfs.append(df)
                 else:
-                    failed_count += 1
+                    failed_codes.append(code)
             
-            logger.info(f"[批量同步] Efinance 批量同步完成: 成功 {success_count}, 失败 {failed_count}")
+            if all_dfs:
+                combined_df = pd.concat(all_dfs, ignore_index=True)
+                logger.info(f"[批量同步] 开始批量保存 {len(combined_df)} 条记录...")
+                saved_count = self.db.save_daily_data_batch(combined_df, "EfinanceFetcher")
+                success_count = len([c for c in stock_codes if c not in failed_codes])
+                logger.info(f"[批量同步] Efinance 批量同步完成: 保存 {saved_count} 条，成功 {success_count} 只股票，失败 {len(failed_codes)} 只")
+            else:
+                success_count = 0
+                logger.warning("[批量同步] 无有效数据可保存")
             
             return {
                 "total": len(stock_codes),
                 "success": success_count,
-                "failed": failed_count,
+                "failed": len(failed_codes),
                 "data_sources": "EfinanceFetcher",
                 "errors": [],
                 "sync_mode": "efinance_batch"
@@ -237,22 +249,24 @@ class DailyStockSyncService:
             成功保存的股票数量
         """
         import pandas as pd
+        from data_provider.base import DataFetcherManager
         
         if df is None or df.empty:
             return 0
         
-        success_count = 0
+        stock_codes = df['code'].unique().tolist()
+        logger.info(f"[批量保存] 批量获取 {len(stock_codes)} 只股票名称...")
+        manager = DataFetcherManager()
+        stock_names = manager.batch_get_stock_names(stock_codes)
         
-        for code in df['code'].unique():
-            try:
-                stock_df = df[df['code'] == code].copy()
-                saved = self.repo.save_dataframe(stock_df, code, data_source)
-                if saved > 0:
-                    success_count += 1
-            except Exception as e:
-                logger.debug(f"保存股票 {code} 数据失败: {e}")
+        df_with_names = df.copy()
+        df_with_names['name'] = df_with_names['code'].map(stock_names)
         
-        return success_count
+        logger.info(f"[批量保存] 开始批量保存 {len(df)} 条记录...")
+        saved_count = self.db.save_daily_data_batch(df_with_names, data_source)
+        
+        logger.info(f"[批量保存] 保存完成: {saved_count} 条记录，涉及 {len(stock_codes)} 只股票")
+        return len(stock_codes)
     
     def _sync_stocks_one_by_one(self, sync_date: date) -> Dict[str, Any]:
         """
@@ -337,7 +351,8 @@ class DailyStockSyncService:
         
         流程：
         1. 使用 DataFetcherManager 获取数据
-        2. 保存到数据库
+        2. 获取股票中文名称
+        3. 保存到数据库
         
         Args:
             code: 股票代码
@@ -365,7 +380,10 @@ class DailyStockSyncService:
                 logger.warning(f"股票 {code} 未获取到数据")
                 return False, ""
             
-            saved_count = self.repo.save_dataframe(df, code, data_source)
+            # 获取股票名称
+            stock_name = manager.get_stock_name(code)
+            
+            saved_count = self.repo.save_dataframe(df, code, data_source, stock_name)
             
             if saved_count > 0:
                 logger.debug(f"股票 {code} 同步成功，保存 {saved_count} 条记录 (来源: {data_source})")

@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS `stock_daily` (
     `code` VARCHAR(10) NOT NULL COMMENT '股票代码',
     `date` DATE NOT NULL COMMENT '交易日期',
     `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '自增ID',
+    `name` VARCHAR(50) COMMENT '股票中文名称',
     `open` DOUBLE COMMENT '开盘价',
     `high` DOUBLE COMMENT '最高价',
     `low` DOUBLE COMMENT '最低价',

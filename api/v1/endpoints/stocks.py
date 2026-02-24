@@ -64,8 +64,11 @@ def search_stocks(
         StockSearchResponse: 搜索结果
     """
     try:
+        logger.info(f"API search_stocks called with keyword={keyword}, limit={limit}")
         repo = StockRepository()
+        logger.info(f"StockRepository created: {repo.db}")
         results = repo.search_stocks(keyword, limit)
+        logger.info(f"search_stocks returned {len(results)} results: {results}")
         
         items = [
             StockSearchResult(
