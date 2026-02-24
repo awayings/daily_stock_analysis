@@ -82,7 +82,8 @@ class PortfolioService:
                 code = h['code']
                 name = stock_service.get_realtime_quote_from_db(code).get('stock_name') if stock_service else h.get('name', code)
                 entry_price = Decimal(str(h['entry_price']))
-                last_price = Decimal(str(h.get('last_price', h['entry_price'])))
+                last_price_val = h.get('last_price')
+                last_price = Decimal(str(last_price_val)) if last_price_val is not None else entry_price
 
                 holding = self.repo.add_holding(
                     portfolio_id=portfolio.id,
@@ -320,7 +321,7 @@ class PortfolioService:
 
         if price_type == 'current':
             quote = stock_service.get_realtime_quote_from_db(holding.code) if stock_service else None
-            if not quote:
+            if not quote or quote.get('current_price') is None:
                 raise ValueError("CLOSE_004: 无法获取当前收盘价")
             close_price = Decimal(str(quote['current_price']))
         else:
@@ -646,7 +647,7 @@ class PortfolioService:
         for h in holdings:
             if not h.is_closed:
                 quote = stock_service.get_realtime_quote_from_db(h.code) if stock_service else None
-                if quote:
+                if quote and quote.get('current_price') is not None:
                     current_price = Decimal(str(quote['current_price']))
                     current_prices[h.code] = current_price
                     self.repo.update_holding(h.id, last_price=current_price)
@@ -660,8 +661,9 @@ class PortfolioService:
 
         for h in holdings:
             if not h.is_closed:
-                current_price = current_prices.get(h.code, h.last_price)
-                pnl_pct = ((current_price / h.last_price - 1) * 100) if h.last_price > 0 else Decimal('0')
+                last_price = h.last_price if h.last_price is not None else h.entry_price
+                current_price = current_prices.get(h.code, last_price)
+                pnl_pct = ((current_price / last_price - 1) * 100) if last_price > 0 else Decimal('0')
                 weighted_pnl = pnl_pct * h.weight / 100
                 unrealized_pnl += weighted_pnl
                 active_count += 1
@@ -730,13 +732,14 @@ class PortfolioService:
         holdings_data = []
         for h in holdings:
             quote = stock_service.get_realtime_quote_from_db(h.code) if stock_service else None
-            current_price = Decimal(str(quote['current_price'])) if quote else h.entry_price
+            current_price = Decimal(str(quote['current_price'])) if quote and quote.get('current_price') is not None else h.entry_price
 
             pnl_pct = ((current_price / h.entry_price - 1) * 100) if h.entry_price > 0 else Decimal('0')
             weighted_pnl = pnl_pct * h.weight / 100
 
             holdings_data.append({
                 'id': h.id,
+                'portfolio_id': h.portfolio_id,
                 'code': h.code,
                 'name': h.name,
                 'entry_price': float(h.entry_price),
@@ -768,9 +771,10 @@ class PortfolioService:
         stock_service = self._get_stock_service()
 
         quote = stock_service.get_realtime_quote_from_db(holding.code) if stock_service else None
-        current_price = Decimal(str(quote['current_price'])) if quote else holding.last_price
+        last_price = holding.last_price if holding.last_price is not None else holding.entry_price
+        current_price = Decimal(str(quote['current_price'])) if quote and quote.get('current_price') is not None else last_price
 
-        pnl_pct = ((current_price / holding.last_price - 1) * 100) if holding.last_price > 0 else Decimal('0')
+        pnl_pct = ((current_price / last_price - 1) * 100) if last_price > 0 else Decimal('0')
 
         return {
             'id': holding.id,
@@ -798,9 +802,10 @@ class PortfolioService:
 
         for h in active_holdings:
             quote = stock_service.get_realtime_quote_from_db(h.code) if stock_service else None
-            current_price = Decimal(str(quote['current_price'])) if quote else h.last_price
+            current_price = Decimal(str(quote['current_price'])) if quote and quote.get('current_price') is not None else (h.last_price if h.last_price is not None else h.entry_price)
 
-            pnl_pct = ((current_price / h.last_price - 1) * 100) if h.last_price > 0 else Decimal('0')
+            last_price = h.last_price if h.last_price is not None else h.entry_price
+            pnl_pct = ((current_price / last_price - 1) * 100) if last_price > 0 else Decimal('0')
             weighted_pnl = pnl_pct * h.weight / 100
             total_pnl += weighted_pnl
 

@@ -99,7 +99,7 @@ async def create_portfolio(request: PortfolioCreate):
     except ValueError as e:
         _handle_service_error(e)
     except Exception as e:
-        logger.error(f"创建组合失败: {e}")
+        logger.error(f"创建组合失败: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"code": "SYSTEM_001", "message": "创建组合失败"}

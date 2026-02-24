@@ -44,16 +44,35 @@ class PortfolioRepository:
                 currency=currency
             )
             session.add(portfolio)
-            session.flush()
             session.commit()
-            return portfolio
+        
+        if self.db.is_doris:
+            created = self.get_portfolio_by_name(name)
+            if created:
+                return created
+        
+        return self.get_portfolio_by_name(name) or portfolio
 
     def get_portfolio_by_id(self, portfolio_id: int) -> Optional[Portfolio]:
         """根据ID获取组合"""
         with self.db.get_session() as session:
-            return session.execute(
+            portfolio = session.execute(
                 select(Portfolio).where(Portfolio.id == portfolio_id)
             ).scalars().first()
+            
+            if portfolio:
+                return Portfolio(
+                    id=portfolio.id,
+                    name=portfolio.name,
+                    description=portfolio.description,
+                    initial_capital=portfolio.initial_capital,
+                    currency=portfolio.currency,
+                    is_deleted=portfolio.is_deleted,
+                    deleted_at=portfolio.deleted_at,
+                    created_at=portfolio.created_at,
+                    updated_at=portfolio.updated_at,
+                )
+            return None
 
     def get_portfolio_by_name(self, name: str, include_deleted: bool = False) -> Optional[Portfolio]:
         """根据名称获取组合"""
@@ -61,9 +80,23 @@ class PortfolioRepository:
             conditions = [Portfolio.name == name]
             if not include_deleted:
                 conditions.append(Portfolio.is_deleted == False)
-            return session.execute(
+            portfolio = session.execute(
                 select(Portfolio).where(and_(*conditions))
             ).scalars().first()
+            
+            if portfolio:
+                return Portfolio(
+                    id=portfolio.id,
+                    name=portfolio.name,
+                    description=portfolio.description,
+                    initial_capital=portfolio.initial_capital,
+                    currency=portfolio.currency,
+                    is_deleted=portfolio.is_deleted,
+                    deleted_at=portfolio.deleted_at,
+                    created_at=portfolio.created_at,
+                    updated_at=portfolio.updated_at,
+                )
+            return None
 
     def get_portfolio_list(
         self,
@@ -160,9 +193,50 @@ class PortfolioRepository:
                 shares=shares
             )
             session.add(holding)
-            session.flush()
             session.commit()
-            return holding
+        
+        if self.db.is_doris:
+            created = self._get_latest_holding(portfolio_id, code)
+            if created:
+                return created
+        
+        return self._get_latest_holding(portfolio_id, code) or holding
+
+    def _get_latest_holding(self, portfolio_id: int, code: str) -> Optional[PortfolioHolding]:
+        """获取指定组合中指定股票的最新持仓"""
+        with self.db.get_session() as session:
+            holding = session.execute(
+                select(PortfolioHolding)
+                .where(
+                    and_(
+                        PortfolioHolding.portfolio_id == portfolio_id,
+                        PortfolioHolding.code == code,
+                        PortfolioHolding.is_closed == False
+                    )
+                )
+                .order_by(PortfolioHolding.added_at.desc())
+                .limit(1)
+            ).scalars().first()
+            
+            if holding:
+                return PortfolioHolding(
+                    id=holding.id,
+                    portfolio_id=holding.portfolio_id,
+                    code=holding.code,
+                    name=holding.name,
+                    entry_price=holding.entry_price,
+                    last_price=holding.last_price,
+                    weight=holding.weight,
+                    shares=holding.shares,
+                    is_closed=holding.is_closed,
+                    close_price=holding.close_price,
+                    close_quantity=holding.close_quantity,
+                    close_type=holding.close_type,
+                    added_at=holding.added_at,
+                    closed_at=holding.closed_at,
+                    updated_at=holding.updated_at,
+                )
+            return None
 
     def get_holdings(
         self,
@@ -176,14 +250,55 @@ class PortfolioRepository:
             )
             if not include_closed:
                 query = query.where(PortfolioHolding.is_closed == False)
-            return list(session.execute(query).scalars().all())
+            holdings = session.execute(query).scalars().all()
+            
+            return [
+                PortfolioHolding(
+                    id=h.id,
+                    portfolio_id=h.portfolio_id,
+                    code=h.code,
+                    name=h.name,
+                    entry_price=h.entry_price,
+                    last_price=h.last_price,
+                    weight=h.weight,
+                    shares=h.shares,
+                    is_closed=h.is_closed,
+                    close_price=h.close_price,
+                    close_quantity=h.close_quantity,
+                    close_type=h.close_type,
+                    added_at=h.added_at,
+                    closed_at=h.closed_at,
+                    updated_at=h.updated_at,
+                )
+                for h in holdings
+            ]
 
     def get_holding_by_id(self, holding_id: int) -> Optional[PortfolioHolding]:
         """根据ID获取持仓"""
         with self.db.get_session() as session:
-            return session.execute(
+            holding = session.execute(
                 select(PortfolioHolding).where(PortfolioHolding.id == holding_id)
             ).scalars().first()
+            
+            if holding:
+                return PortfolioHolding(
+                    id=holding.id,
+                    portfolio_id=holding.portfolio_id,
+                    code=holding.code,
+                    name=holding.name,
+                    entry_price=holding.entry_price,
+                    last_price=holding.last_price,
+                    weight=holding.weight,
+                    shares=holding.shares,
+                    is_closed=holding.is_closed,
+                    close_price=holding.close_price,
+                    close_quantity=holding.close_quantity,
+                    close_type=holding.close_type,
+                    added_at=holding.added_at,
+                    closed_at=holding.closed_at,
+                    updated_at=holding.updated_at,
+                )
+            return None
 
     def update_holding(self, holding_id: int, **kwargs) -> Optional[PortfolioHolding]:
         """更新持仓"""
