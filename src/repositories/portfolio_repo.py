@@ -45,7 +45,6 @@ class PortfolioRepository:
             )
             session.add(portfolio)
             session.flush()
-            session.refresh(portfolio)
             session.commit()
             return portfolio
 
@@ -99,7 +98,6 @@ class PortfolioRepository:
                     if hasattr(portfolio, key):
                         setattr(portfolio, key, value)
                 session.flush()
-                session.refresh(portfolio)
                 session.commit()
 
             return portfolio
@@ -163,7 +161,6 @@ class PortfolioRepository:
             )
             session.add(holding)
             session.flush()
-            session.refresh(holding)
             session.commit()
             return holding
 
@@ -200,7 +197,6 @@ class PortfolioRepository:
                     if hasattr(holding, key):
                         setattr(holding, key, value)
                 session.flush()
-                session.refresh(holding)
                 session.commit()
 
             return holding
@@ -225,7 +221,6 @@ class PortfolioRepository:
                 holding.close_type = close_type
                 holding.closed_at = datetime.now()
                 session.flush()
-                session.refresh(holding)
                 session.commit()
 
             return holding
