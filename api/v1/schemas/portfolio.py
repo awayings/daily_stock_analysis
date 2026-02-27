@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, field_validator
 class HoldingCreate(BaseModel):
     """持仓创建请求"""
     code: str = Field(..., description="股票代码")
+    name: Optional[str] = Field(None, description="股票名称")
     entry_price: float = Field(..., gt=0, description="建仓价格")
     last_price: Optional[float] = Field(None, description="上次更新价格(默认为建仓价格)")
     weight: float = Field(..., gt=0, le=100, description="仓位占比")

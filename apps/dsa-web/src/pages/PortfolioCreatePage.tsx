@@ -83,6 +83,7 @@ const PortfolioCreatePage: React.FC = () => {
         currency,
         holdings: holdings.map(h => ({
           code: h.code.toUpperCase(),
+          name: h.name,
           entryPrice: parseFloat(h.entryPrice),
           weight: parseFloat(h.weight),
         })),

@@ -62,6 +62,7 @@ export interface CreatePortfolioRequest {
   currency?: string;
   holdings?: {
     code: string;
+    name?: string;
     entryPrice: number;
     lastPrice?: number;
     weight: number;
@@ -204,6 +205,7 @@ export const portfolioApi = {
     if (data.holdings) {
       requestData.holdings = data.holdings.map(h => ({
         code: h.code,
+        name: h.name,
         entry_price: h.entryPrice,
         weight: h.weight,
       }));

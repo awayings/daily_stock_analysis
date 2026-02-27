@@ -80,8 +80,12 @@ class PortfolioService:
             stock_service = self._get_stock_service()
             for h in holdings:
                 code = h['code']
-                quote = stock_service.get_realtime_quote_from_db(code) if stock_service else None
-                name = quote.get('stock_name') if quote else h.get('name', code)
+                name = h.get('name')
+                if not name:
+                    quote = stock_service.get_realtime_quote_from_db(code) if stock_service else None
+                    name = quote.get('stock_name') if quote else None
+                if not name:
+                    name = code
                 entry_price = Decimal(str(h['entry_price']))
                 last_price_val = h.get('last_price')
                 last_price = Decimal(str(last_price_val)) if last_price_val is not None else entry_price
