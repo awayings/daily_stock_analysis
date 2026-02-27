@@ -75,6 +75,9 @@ def parse_arguments() -> argparse.Namespace:
   python main.py --sync-etf         # 同步 ETF 基金数据
   python main.py --sync-lof         # 同步 LOF 基金数据
   python main.py --sync-funds       # 同步全部基金（ETF + LOF）数据
+  python main.py --sync-hk          # 同步港股日线数据（今天）
+  python main.py --sync-hk --date 2025-02-27  # 同步指定日期港股数据
+  python main.py --sync-hk-list     # 同步港股列表
         '''
     )
 
@@ -239,6 +242,18 @@ def parse_arguments() -> argparse.Namespace:
         '--sync-funds',
         action='store_true',
         help='同步全部基金（ETF + LOF）日线数据'
+    )
+
+    parser.add_argument(
+        '--sync-hk',
+        action='store_true',
+        help='同步港股日线数据'
+    )
+
+    parser.add_argument(
+        '--sync-hk-list',
+        action='store_true',
+        help='同步港股列表'
     )
 
     return parser.parse_args()
@@ -486,6 +501,138 @@ def _send_fund_sync_notification(result: dict) -> None:
         logger.info("✅ 钉钉通知发送成功")
     except Exception as e:
         logger.error(f"❌ 钉钉通知发送失败: {e}")
+
+
+def run_hk_sync(args: argparse.Namespace) -> int:
+    """
+    Execute HK stock daily data sync.
+
+    Args:
+        args: Command line arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    from datetime import date as date_type
+    from src.services.hk_stock_sync_service import HKStockSyncService
+
+    sync_date = None
+    if args.date:
+        try:
+            sync_date = datetime.strptime(args.date, '%Y-%m-%d').date()
+        except ValueError:
+            logger.error(f"日期格式错误: {args.date}，请使用 YYYY-MM-DD 格式")
+            return 1
+    else:
+        sync_date = date_type.today()
+
+    logger.info("=" * 60)
+    logger.info(f"港股日线数据同步开始 - 目标日期: {sync_date}")
+    logger.info("=" * 60)
+
+    try:
+        service = HKStockSyncService()
+        result = service.sync_hk_daily(sync_date=sync_date)
+
+        total = result.get('total', 0)
+        saved = result.get('saved', 0)
+        data_source = result.get('data_source', '')
+        errors = result.get('errors', [])
+
+        logger.info(f"同步完成: 获取 {total} 条, 保存 {saved} 条")
+        logger.info(f"数据源: {data_source or '无'}")
+
+        if errors:
+            logger.warning(f"错误详情:")
+            for err in errors:
+                logger.warning(f"  - {err}")
+
+        if args.notify:
+            logger.info("\n正在发送钉钉通知...")
+            try:
+                from src.notification import NotificationService
+                notifier = NotificationService()
+
+                notify_message = (
+                    f"## 📊 港股日线数据同步报告\n\n"
+                    f"**同步日期**: {sync_date}\n\n"
+                    f"### 同步统计\n\n"
+                    f"| 指标 | 数量 |\n"
+                    f"| --- | --- |\n"
+                    f"| 获取记录 | {total} |\n"
+                    f"| 保存记录 | {saved} |\n"
+                    f"| 数据源 | {data_source or '无'} |"
+                )
+
+                notifier.send(notify_message)
+                logger.info("✅ 钉钉通知发送成功")
+            except Exception as e:
+                logger.error(f"❌ 钉钉通知发送失败: {e}")
+
+        print("\n" + "=" * 60)
+        print("港股日线数据同步完成")
+        print("=" * 60)
+        print(f"同步日期: {sync_date}")
+        print(f"获取: {total} 条")
+        print(f"保存: {saved} 条")
+        print(f"数据源: {data_source or '无'}")
+        if args.notify:
+            print("通知: ✅ 已发送")
+        print("=" * 60)
+
+        return 0 if saved > 0 else 1
+
+    except Exception as e:
+        logger.exception(f"港股日线数据同步失败: {e}")
+        return 1
+
+
+def run_hk_list_sync(args: argparse.Namespace) -> int:
+    """
+    Execute HK stock list sync.
+
+    Args:
+        args: Command line arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    from src.services.hk_stock_sync_service import HKStockSyncService
+
+    logger.info("=" * 60)
+    logger.info("港股列表同步开始")
+    logger.info("=" * 60)
+
+    try:
+        service = HKStockSyncService()
+        result = service.sync_hk_stock_list()
+
+        total = result.get('total', 0)
+        saved = result.get('saved', 0)
+        data_source = result.get('data_source', '')
+        errors = result.get('errors', [])
+
+        logger.info(f"同步完成: 获取 {total} 只股票")
+        logger.info(f"数据源: {data_source or '无'}")
+
+        if errors:
+            logger.warning(f"错误详情:")
+            for err in errors:
+                logger.warning(f"  - {err}")
+
+        print("\n" + "=" * 60)
+        print("港股列表同步完成")
+        print("=" * 60)
+        print(f"获取: {total} 只股票")
+        print(f"保存: {saved} 条")
+        print(f"数据源: {data_source or '无'}")
+        print("=" * 60)
+
+        return 0 if total > 0 else 1
+
+    except Exception as e:
+        logger.exception(f"港股列表同步失败: {e}")
+        return 1
 
 
 def run_full_analysis(
@@ -757,6 +904,16 @@ def main() -> int:
         if getattr(args, 'sync_daily', False):
             logger.info("模式: 日线数据同步")
             return run_daily_sync(args)
+
+        # 模式-0.6: 港股数据同步
+        if getattr(args, 'sync_hk', False):
+            logger.info("模式: 港股日线数据同步")
+            return run_hk_sync(args)
+
+        # 模式-0.55: 港股列表同步
+        if getattr(args, 'sync_hk_list', False):
+            logger.info("模式: 港股列表同步")
+            return run_hk_list_sync(args)
 
         # 模式-0.5: 基金数据同步
         sync_etf = getattr(args, 'sync_etf', False)
