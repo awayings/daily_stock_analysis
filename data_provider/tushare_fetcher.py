@@ -71,6 +71,88 @@ def _is_us_code(stock_code: str) -> bool:
     return bool(re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', code))
 
 
+def _is_hk_code(stock_code: str) -> bool:
+    """
+    Check if the code is a Hong Kong stock code.
+
+    HK code patterns:
+    - 'HK00001' (local format with HK prefix)
+    - '00001.HK' (Tushare format)
+    - '00700' (5-digit numeric, could be HK)
+    """
+    code = stock_code.strip().upper()
+    if code.startswith('HK') and len(code) == 7:
+        return True
+    if code.endswith('.HK'):
+        return True
+    return code.isdigit() and len(code) == 5
+
+
+def _convert_hk_code_to_tushare(stock_code: str) -> str:
+    """
+    Convert HK stock code to Tushare format: '00001.HK'
+
+    IMPORTANT: Tushare requires 5-digit zero-padded format.
+
+    Input formats accepted:
+    - 'HK00001' -> '00001.HK'
+    - '00001.HK' -> '00001.HK' (already correct)
+    - '00700' -> '00700.HK'
+    - '700' -> '00700.HK' (auto-pad to 5 digits)
+    """
+    code = stock_code.strip().upper()
+
+    if code.endswith('.HK'):
+        num_part = code[:-3]
+        num_part = num_part.zfill(5)
+        return f"{num_part}.HK"
+
+    if code.startswith('HK'):
+        num_part = code[2:]
+        num_part = num_part.zfill(5)
+        return f"{num_part}.HK"
+
+    if code.isdigit():
+        num_part = code.zfill(5)
+        return f"{num_part}.HK"
+
+    return stock_code
+
+
+def _convert_hk_code_to_local(stock_code: str) -> str:
+    """
+    Convert HK stock code to local storage format: 'HK00001'
+
+    Output format: 'HK' + 5-digit zero-padded number
+
+    Input formats accepted:
+    - '00001.HK' -> 'HK00001'
+    - 'HK00001' -> 'HK00001' (already correct)
+    - '00700' -> 'HK00700'
+    - '700' -> 'HK00700' (auto-pad to 5 digits)
+    """
+    code = stock_code.strip().upper()
+
+    if code.startswith('HK') and len(code) == 7:
+        return code
+
+    if code.startswith('HK'):
+        num_part = code[2:]
+        num_part = num_part.zfill(5)
+        return f"HK{num_part}"
+
+    if code.endswith('.HK'):
+        num_part = code[:-3]
+        num_part = num_part.zfill(5)
+        return f"HK{num_part}"
+
+    if code.isdigit():
+        num_part = code.zfill(5)
+        return f"HK{num_part}"
+
+    return stock_code
+
+
 class TushareFetcher(BaseFetcher):
     """
     Tushare Pro 数据源实现
@@ -258,28 +340,27 @@ class TushareFetcher(BaseFetcher):
         - 深市股票：000001.SZ
         - 沪市 ETF：510050.SH, 563230.SH
         - 深市 ETF：159919.SZ
+        - 港股：00001.HK (5位数字补零)
         
         Args:
-            stock_code: 原始代码，如 '600519', '000001', '563230'
+            stock_code: 原始代码，如 '600519', '000001', '563230', 'HK00700'
             
         Returns:
-            Tushare 格式代码，如 '600519.SH', '000001.SZ', '563230.SH'
+            Tushare 格式代码，如 '600519.SH', '000001.SZ', '00700.HK'
         """
         code = stock_code.strip()
         
-        # Already has suffix
+        if _is_hk_code(code):
+            return _convert_hk_code_to_tushare(code)
+        
         if '.' in code:
             return code.upper()
         
-        # ETF: determine exchange by prefix
         if code.startswith(_ETF_SH_PREFIXES) and len(code) == 6:
             return f"{code}.SH"
         if code.startswith(_ETF_SZ_PREFIXES) and len(code) == 6:
             return f"{code}.SZ"
         
-        # Regular stocks
-        # Shanghai: 600xxx, 601xxx, 603xxx, 688xxx (STAR Market)
-        # Shenzhen: 000xxx, 002xxx, 300xxx (ChiNext)
         if code.startswith(('600', '601', '603', '688')):
             return f"{code}.SH"
         elif code.startswith(('000', '002', '300')):
@@ -301,6 +382,7 @@ class TushareFetcher(BaseFetcher):
         根据代码类型选择不同接口：
         - 普通股票：daily()
         - ETF 基金：fund_daily()
+        - 港股：hk_daily()
         
         流程：
         1. 检查 API 是否可用
@@ -312,34 +394,42 @@ class TushareFetcher(BaseFetcher):
         if self._api is None:
             raise DataFetchError("Tushare API 未初始化，请检查 Token 配置")
         
-        # US stocks not supported
         if _is_us_code(stock_code):
             raise DataFetchError(f"TushareFetcher 不支持美股 {stock_code}，请使用 AkshareFetcher 或 YfinanceFetcher")
         
-        # Rate-limit check
         self._check_rate_limit()
         
-        # Convert code format
         ts_code = self._convert_stock_code(stock_code)
         
-        # Convert date format (Tushare requires YYYYMMDD)
         ts_start = start_date.replace('-', '')
         ts_end = end_date.replace('-', '')
         
+        is_hk = _is_hk_code(stock_code)
         is_etf = _is_etf_code(stock_code)
-        api_name = "fund_daily" if is_etf else "daily"
+        
+        if is_hk:
+            api_name = "hk_daily"
+        elif is_etf:
+            api_name = "fund_daily"
+        else:
+            api_name = "daily"
+        
         logger.debug(f"调用 Tushare {api_name}({ts_code}, {ts_start}, {ts_end})")
         
         try:
-            if is_etf:
-                # ETF uses fund_daily interface
+            if is_hk:
+                df = self._api.hk_daily(
+                    ts_code=ts_code,
+                    start_date=ts_start,
+                    end_date=ts_end,
+                )
+            elif is_etf:
                 df = self._api.fund_daily(
                     ts_code=ts_code,
                     start_date=ts_start,
                     end_date=ts_end,
                 )
             else:
-                # Regular stocks use daily interface
                 df = self._api.daily(
                     ts_code=ts_code,
                     start_date=ts_start,
@@ -367,34 +457,40 @@ class TushareFetcher(BaseFetcher):
         
         需要映射到标准列名：
         date, open, high, low, close, volume, amount, pct_chg
+        
+        Note: HK stocks use different units (vol in shares, amount in HKD), no conversion needed.
         """
         df = df.copy()
         
-        # 列名映射
         column_mapping = {
             'trade_date': 'date',
             'vol': 'volume',
-            # open, high, low, close, amount, pct_chg 列名相同
         }
         
         df = df.rename(columns=column_mapping)
         
-        # 转换日期格式（YYYYMMDD -> YYYY-MM-DD）
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'], format='%Y%m%d')
         
-        # 成交量单位转换（Tushare 的 vol 单位是手，需要转换为股）
+        is_hk = _is_hk_code(stock_code)
+        
         if 'volume' in df.columns:
-            df['volume'] = df['volume'] * 100
+            if is_hk:
+                pass
+            else:
+                df['volume'] = df['volume'] * 100
         
-        # 成交额单位转换（Tushare 的 amount 单位是千元，转换为元）
         if 'amount' in df.columns:
-            df['amount'] = df['amount'] * 1000
+            if is_hk:
+                pass
+            else:
+                df['amount'] = df['amount'] * 1000
         
-        # 添加股票代码列
-        df['code'] = stock_code
+        if is_hk:
+            df['code'] = _convert_hk_code_to_local(stock_code)
+        else:
+            df['code'] = stock_code
         
-        # 只保留需要的列
         keep_cols = ['code'] + STANDARD_COLUMNS
         existing_cols = [col for col in keep_cols if col in df.columns]
         df = df[existing_cols]
@@ -497,6 +593,57 @@ class TushareFetcher(BaseFetcher):
         
         return None
     
+    def get_hk_stock_list(self, list_status: str = 'L') -> Optional[pd.DataFrame]:
+        """
+        Get Hong Kong stock list using hk_basic interface.
+
+        Args:
+            list_status: 'L' for listed, 'D' for delisted, 'P' for suspended
+
+        Returns:
+            DataFrame with columns: code, name, fullname, market, list_status, etc.
+            Code format: 'HK00001' (local format with HK prefix)
+        """
+        if self._api is None:
+            logger.warning("Tushare API 未初始化，无法获取港股列表")
+            return None
+
+        try:
+            self._check_rate_limit()
+
+            logger.info(f"[API调用] Tushare hk_basic(list_status={list_status}) 获取港股列表...")
+
+            df = self._api.hk_basic(list_status=list_status)
+
+            if df is not None and not df.empty:
+                df = df.copy()
+
+                df['code'] = df['ts_code'].apply(_convert_hk_code_to_local)
+
+                if not hasattr(self, '_stock_name_cache'):
+                    self._stock_name_cache = {}
+                for _, row in df.iterrows():
+                    self._stock_name_cache[row['code']] = row['name']
+
+                logger.info(f"[Tushare] 获取港股列表成功: {len(df)} 条")
+
+                result_cols = ['code', 'name']
+                if 'fullname' in df.columns:
+                    result_cols.append('fullname')
+                if 'market' in df.columns:
+                    result_cols.append('market')
+                if 'list_status' in df.columns:
+                    result_cols.append('list_status')
+                if 'list_date' in df.columns:
+                    result_cols.append('list_date')
+
+                return df[result_cols]
+
+        except Exception as e:
+            logger.warning(f"Tushare 获取港股列表失败: {e}")
+
+        return None
+    
     def get_daily_data_by_date(self, trade_date: str) -> Optional[pd.DataFrame]:
         """
         按日期批量获取全市场日线数据
@@ -565,6 +712,71 @@ class TushareFetcher(BaseFetcher):
                 logger.warning(f"Tushare 配额可能超限: {e}")
                 raise RateLimitError(f"Tushare 配额超限: {e}") from e
             logger.error(f"[Tushare] 批量获取数据失败: {e}")
+            return None
+    
+    def get_hk_daily_data_by_date(self, trade_date: str) -> Optional[pd.DataFrame]:
+        """
+        Batch fetch all HK stocks daily data for a specific date.
+
+        Uses Tushare hk_daily interface to get all HK stocks data in one request.
+
+        Args:
+            trade_date: Trading date in 'YYYY-MM-DD' or 'YYYYMMDD' format
+
+        Returns:
+            DataFrame with standardized columns (code, date, open, high, low, close, etc.)
+            Code format: 'HK00001' (local format)
+            Returns None on failure.
+        """
+        if self._api is None:
+            logger.warning("Tushare API 未初始化，无法批量获取港股数据")
+            return None
+
+        try:
+            self._check_rate_limit()
+
+            trade_date_fmt = trade_date.replace('-', '')
+
+            logger.info(f"[API调用] Tushare hk_daily(trade_date={trade_date_fmt}) 批量获取港股数据...")
+            import time as _time
+            api_start = _time.time()
+
+            df = self._api.hk_daily(trade_date=trade_date_fmt)
+
+            api_elapsed = _time.time() - api_start
+
+            if df is None or df.empty:
+                logger.warning(f"[API返回] Tushare 港股批量获取 {trade_date_fmt} 数据为空, 耗时 {api_elapsed:.2f}s")
+                return None
+
+            logger.info(f"[API返回] Tushare 港股批量获取成功: {len(df)} 条记录, 耗时 {api_elapsed:.2f}s")
+
+            df = df.copy()
+
+            df['code'] = df['ts_code'].apply(_convert_hk_code_to_local)
+
+            column_mapping = {
+                'trade_date': 'date',
+                'vol': 'volume',
+            }
+            df = df.rename(columns=column_mapping)
+
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'], format='%Y%m%d')
+
+            keep_cols = ['code'] + STANDARD_COLUMNS
+            existing_cols = [col for col in keep_cols if col in df.columns]
+            df = df[existing_cols]
+
+            logger.info(f"[Tushare] 港股批量数据标准化完成: {len(df)} 条")
+            return df
+
+        except Exception as e:
+            error_msg = str(e).lower()
+            if any(keyword in error_msg for keyword in ['quota', '配额', 'limit', '权限']):
+                logger.warning(f"Tushare 配额可能超限: {e}")
+                raise RateLimitError(f"Tushare 配额超限: {e}") from e
+            logger.error(f"[Tushare] 港股批量获取数据失败: {e}")
             return None
     
     def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
