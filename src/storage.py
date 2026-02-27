@@ -39,6 +39,7 @@ from sqlalchemy import (
     and_,
     desc,
     text,
+    func,
 )
 from sqlalchemy.orm import (
     declarative_base,
@@ -933,7 +934,7 @@ class DatabaseManager:
             result = session.execute(
                 select(StockDaily).where(
                     and_(
-                        StockDaily.code == code,
+                        func.lower(StockDaily.code) == code.lower(),
                         StockDaily.date == target_date
                     )
                 )
@@ -961,7 +962,7 @@ class DatabaseManager:
         with self.get_session() as session:
             results = session.execute(
                 select(StockDaily)
-                .where(StockDaily.code == code)
+                .where(func.lower(StockDaily.code) == code.lower())
                 .order_by(desc(StockDaily.date))
                 .limit(days)
             ).scalars().all()
@@ -1253,7 +1254,7 @@ class DatabaseManager:
                 select(StockDaily)
                 .where(
                     and_(
-                        StockDaily.code == code,
+                        func.lower(StockDaily.code) == code.lower(),
                         StockDaily.date >= start_date,
                         StockDaily.date <= end_date
                     )
@@ -1327,7 +1328,7 @@ class DatabaseManager:
                         existing = session.execute(
                             select(StockDaily).where(
                                 and_(
-                                    StockDaily.code == code,
+                                    func.lower(StockDaily.code) == code.lower(),
                                     StockDaily.date == row_date
                                 )
                             )

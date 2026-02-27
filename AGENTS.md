@@ -118,4 +118,7 @@
 ./test.sh syntax
 python -m py_compile main.py src/*.py data_provider/*.py
 flake8 main.py src/ --max-line-length=120
+
+# 启动webui测试http
+python main.py --webui-only
 ```

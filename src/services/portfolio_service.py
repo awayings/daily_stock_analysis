@@ -80,7 +80,8 @@ class PortfolioService:
             stock_service = self._get_stock_service()
             for h in holdings:
                 code = h['code']
-                name = stock_service.get_realtime_quote_from_db(code).get('stock_name') if stock_service else h.get('name', code)
+                quote = stock_service.get_realtime_quote_from_db(code) if stock_service else None
+                name = quote.get('stock_name') if quote else h.get('name', code)
                 entry_price = Decimal(str(h['entry_price']))
                 last_price_val = h.get('last_price')
                 last_price = Decimal(str(last_price_val)) if last_price_val is not None else entry_price
@@ -233,7 +234,8 @@ class PortfolioService:
             raise ValueError("PORTFOLIO_005: 仓位占比总和不能超过100%")
 
         stock_service = self._get_stock_service()
-        name = stock_service.get_realtime_quote_from_db(code).get('stock_name') if stock_service else code
+        quote = stock_service.get_realtime_quote_from_db(code) if stock_service else None
+        name = quote.get('stock_name') if quote else code
 
         if last_price is None:
             last_price = entry_price
@@ -414,7 +416,8 @@ class PortfolioService:
                 skipped += 1
                 continue
 
-            name = stock_service.get_realtime_quote_from_db(code).get('stock_name') if stock_service else h.get('name', code)
+            quote = stock_service.get_realtime_quote_from_db(code) if stock_service else None
+            name = quote.get('stock_name') if quote else h.get('name', code)
 
             holding = self.repo.add_holding(
                 portfolio_id=portfolio_id,
