@@ -753,6 +753,7 @@ class PortfolioService:
                 'code': h.code,
                 'name': h.name,
                 'entry_price': float(h.entry_price),
+                'last_price': float(h.last_price) if h.last_price else None,
                 'current_price': float(current_price),
                 'weight': float(h.weight),
                 'pnl_pct': float(pnl_pct),
