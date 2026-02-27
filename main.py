@@ -78,6 +78,7 @@ def parse_arguments() -> argparse.Namespace:
   python main.py --sync-hk          # 同步港股日线数据（今天）
   python main.py --sync-hk --date 2025-02-27  # 同步指定日期港股数据
   python main.py --sync-hk-list     # 同步港股列表
+  python main.py --sync-daily-all   # 同步全部日线数据（A股 + ETF + LOF + 港股）
         '''
     )
 
@@ -254,6 +255,12 @@ def parse_arguments() -> argparse.Namespace:
         '--sync-hk-list',
         action='store_true',
         help='同步港股列表'
+    )
+
+    parser.add_argument(
+        '--sync-daily-all',
+        action='store_true',
+        help='同步全部日线数据（A股 + ETF + LOF + 港股）'
     )
 
     return parser.parse_args()
@@ -635,6 +642,102 @@ def run_hk_list_sync(args: argparse.Namespace) -> int:
         return 1
 
 
+def run_daily_all_sync(args: argparse.Namespace) -> int:
+    """
+    Execute all daily data sync: A-shares + ETF + LOF + HK stocks.
+
+    Args:
+        args: Command line arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    logger.info("=" * 60)
+    logger.info("全量日线数据同步开始（A股 + ETF + LOF + 港股）")
+    logger.info("=" * 60)
+
+    results = {
+        'a_stock': {'success': False, 'exit_code': 1},
+        'funds': {'success': False, 'exit_code': 1},
+        'hk': {'success': False, 'exit_code': 1},
+    }
+
+    # 1. Sync A-shares daily data
+    logger.info("\n[1/3] 同步 A股日线数据...")
+    try:
+        exit_code = run_daily_sync(args)
+        results['a_stock']['exit_code'] = exit_code
+        results['a_stock']['success'] = (exit_code == 0)
+    except Exception as e:
+        logger.exception(f"A股日线同步异常: {e}")
+
+    # 2. Sync funds (ETF + LOF)
+    logger.info("\n[2/3] 同步基金数据（ETF + LOF）...")
+    try:
+        funds_args = argparse.Namespace(
+            sync_etf=False,
+            sync_lof=False,
+            sync_funds=True,
+            notify=getattr(args, 'notify', False),
+        )
+        exit_code = run_fund_sync(funds_args)
+        results['funds']['exit_code'] = exit_code
+        results['funds']['success'] = (exit_code == 0)
+    except Exception as e:
+        logger.exception(f"基金数据同步异常: {e}")
+
+    # 3. Sync HK stocks
+    logger.info("\n[3/3] 同步港股日线数据...")
+    try:
+        exit_code = run_hk_sync(args)
+        results['hk']['exit_code'] = exit_code
+        results['hk']['success'] = (exit_code == 0)
+    except Exception as e:
+        logger.exception(f"港股日线同步异常: {e}")
+
+    # Summary
+    success_count = sum(1 for r in results.values() if r['success'])
+    total_count = len(results)
+
+    print("\n" + "=" * 60)
+    print("全量日线数据同步完成")
+    print("=" * 60)
+    print(f"A股日线: {'✅ 成功' if results['a_stock']['success'] else '❌ 失败'}")
+    print(f"基金数据: {'✅ 成功' if results['funds']['success'] else '❌ 失败'}")
+    print(f"港股日线: {'✅ 成功' if results['hk']['success'] else '❌ 失败'}")
+    print(f"总计: {success_count}/{total_count} 成功")
+    print("=" * 60)
+
+    if args.notify:
+        _send_daily_all_sync_notification(results, success_count, total_count)
+
+    return 0 if success_count == total_count else 1
+
+
+def _send_daily_all_sync_notification(results: dict, success_count: int, total_count: int) -> None:
+    """Send daily all sync notification to DingTalk."""
+    try:
+        from src.notification import NotificationService
+
+        notifier = NotificationService()
+
+        message = (
+            f"## 📊 全量日线数据同步报告\n\n"
+            f"### 同步结果\n\n"
+            f"| 类型 | 状态 |\n"
+            f"| --- | --- |\n"
+            f"| A股日线 | {'✅ 成功' if results['a_stock']['success'] else '❌ 失败'} |\n"
+            f"| 基金数据 | {'✅ 成功' if results['funds']['success'] else '❌ 失败'} |\n"
+            f"| 港股日线 | {'✅ 成功' if results['hk']['success'] else '❌ 失败'} |\n\n"
+            f"**总计**: {success_count}/{total_count} 成功"
+        )
+
+        notifier.send(message)
+        logger.info("✅ 钉钉通知发送成功")
+    except Exception as e:
+        logger.error(f"❌ 钉钉通知发送失败: {e}")
+
+
 def run_full_analysis(
     config: Config,
     args: argparse.Namespace,
@@ -900,6 +1003,11 @@ def main() -> int:
         return 0
 
     try:
+        # 模式-1.5: 全量日线数据同步（A股 + ETF + LOF + 港股）
+        if getattr(args, 'sync_daily_all', False):
+            logger.info("模式: 全量日线数据同步")
+            return run_daily_all_sync(args)
+
         # 模式-1: 日线数据同步
         if getattr(args, 'sync_daily', False):
             logger.info("模式: 日线数据同步")
