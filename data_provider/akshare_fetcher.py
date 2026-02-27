@@ -1121,7 +1121,142 @@ class AkshareFetcher(BaseFetcher):
             logger.error(f"[API错误] 获取 ETF {stock_code} 实时行情失败: {e}")
             circuit_breaker.record_failure(source_key, str(e))
             return None
-    
+
+    def get_etf_spot_data(self) -> Optional[pd.DataFrame]:
+        """
+        Get all ETF spot data (daily OHLCV) in one API call.
+
+        Data source: ak.fund_etf_spot_em()
+        Returns columns: 代码, 名称, 开盘价, 最高价, 最低价, 最新价, 昨收, 涨跌幅, 成交量, 成交额, 数据日期
+
+        Returns:
+            DataFrame with standardized columns for stock_daily table:
+            code, date, name, open, high, low, close, volume, amount, pct_chg, data_source
+        """
+        import akshare as ak
+
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            logger.info("[API调用] ak.fund_etf_spot_em() 获取ETF全量行情数据...")
+            import time as _time
+            api_start = _time.time()
+
+            df = ak.fund_etf_spot_em()
+
+            api_elapsed = _time.time() - api_start
+
+            if df is None or df.empty:
+                logger.warning(f"[API返回] ak.fund_etf_spot_em 返回空数据, 耗时 {api_elapsed:.2f}s")
+                return None
+
+            logger.info(f"[API返回] ak.fund_etf_spot_em 成功: 返回 {len(df)} 只ETF, 耗时 {api_elapsed:.2f}s")
+            logger.debug(f"[API返回] 列名: {list(df.columns)}")
+
+            df = df.copy()
+
+            column_mapping = {
+                '代码': 'code',
+                '名称': 'name',
+                '开盘价': 'open',
+                '最高价': 'high',
+                '最低价': 'low',
+                '最新价': 'close',
+                '昨收': 'pre_close',
+                '涨跌幅': 'pct_chg',
+                '成交量': 'volume',
+                '成交额': 'amount',
+                '数据日期': 'date',
+            }
+
+            existing_cols = [col for col in column_mapping.keys() if col in df.columns]
+            df = df.rename(columns={col: column_mapping[col] for col in existing_cols})
+
+            df['data_source'] = 'akshare_etf'
+
+            keep_cols = ['code', 'date', 'name', 'open', 'high', 'low', 'close',
+                         'volume', 'amount', 'pct_chg', 'data_source']
+            existing_keep = [col for col in keep_cols if col in df.columns]
+            df = df[existing_keep]
+
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+
+            logger.info(f"[ETF行情] 标准化后数据: {len(df)} 条, 列: {list(df.columns)}")
+            return df
+
+        except Exception as e:
+            logger.error(f"[API错误] 获取ETF全量行情失败: {e}")
+            return None
+
+    def get_lof_spot_data(self) -> Optional[pd.DataFrame]:
+        """
+        Get all LOF (Listed Open-end Fund) spot data (daily OHLCV) in one API call.
+
+        Data source: ak.fund_lof_spot_em()
+        Returns columns: 代码, 名称, 最新价, 涨跌额, 涨跌幅, 成交量, 成交额, 开盘价, 最高价, 最低价, 昨收
+
+        Note: LOF interface does not return date field, we use current date.
+
+        Returns:
+            DataFrame with standardized columns for stock_daily table:
+            code, date, name, open, high, low, close, volume, amount, pct_chg, data_source
+        """
+        import akshare as ak
+
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            logger.info("[API调用] ak.fund_lof_spot_em() 获取LOF全量行情数据...")
+            import time as _time
+            api_start = _time.time()
+
+            df = ak.fund_lof_spot_em()
+
+            api_elapsed = _time.time() - api_start
+
+            if df is None or df.empty:
+                logger.warning(f"[API返回] ak.fund_lof_spot_em 返回空数据, 耗时 {api_elapsed:.2f}s")
+                return None
+
+            logger.info(f"[API返回] ak.fund_lof_spot_em 成功: 返回 {len(df)} 只LOF, 耗时 {api_elapsed:.2f}s")
+            logger.debug(f"[API返回] 列名: {list(df.columns)}")
+
+            df = df.copy()
+
+            column_mapping = {
+                '代码': 'code',
+                '名称': 'name',
+                '开盘价': 'open',
+                '最高价': 'high',
+                '最低价': 'low',
+                '最新价': 'close',
+                '昨收': 'pre_close',
+                '涨跌幅': 'pct_chg',
+                '成交量': 'volume',
+                '成交额': 'amount',
+            }
+
+            existing_cols = [col for col in column_mapping.keys() if col in df.columns]
+            df = df.rename(columns={col: column_mapping[col] for col in existing_cols})
+
+            df['date'] = datetime.now().strftime('%Y-%m-%d')
+            df['data_source'] = 'akshare_lof'
+
+            keep_cols = ['code', 'date', 'name', 'open', 'high', 'low', 'close',
+                         'volume', 'amount', 'pct_chg', 'data_source']
+            existing_keep = [col for col in keep_cols if col in df.columns]
+            df = df[existing_keep]
+
+            logger.info(f"[LOF行情] 标准化后数据: {len(df)} 条, 列: {list(df.columns)}")
+            return df
+
+        except Exception as e:
+            logger.error(f"[API错误] 获取LOF全量行情失败: {e}")
+            return None
+
     def _get_hk_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
         """
         获取港股实时行情数据

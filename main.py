@@ -72,6 +72,9 @@ def parse_arguments() -> argparse.Namespace:
   python main.py --sync-daily       # 执行日线数据同步
   python main.py --sync-daily --date 2024-01-15  # 同步指定日期数据
   python main.py --sync-daily --notify  # 同步并发送钉钉通知
+  python main.py --sync-etf         # 同步 ETF 基金数据
+  python main.py --sync-lof         # 同步 LOF 基金数据
+  python main.py --sync-funds       # 同步全部基金（ETF + LOF）数据
         '''
     )
 
@@ -220,6 +223,24 @@ def parse_arguments() -> argparse.Namespace:
         help='同步完成后发送钉钉通知'
     )
 
+    parser.add_argument(
+        '--sync-etf',
+        action='store_true',
+        help='同步 ETF 基金日线数据'
+    )
+
+    parser.add_argument(
+        '--sync-lof',
+        action='store_true',
+        help='同步 LOF 基金日线数据'
+    )
+
+    parser.add_argument(
+        '--sync-funds',
+        action='store_true',
+        help='同步全部基金（ETF + LOF）日线数据'
+    )
+
     return parser.parse_args()
 
 
@@ -354,6 +375,117 @@ def run_daily_sync(args: argparse.Namespace) -> int:
     except Exception as e:
         logger.exception(f"日线数据同步失败: {e}")
         return 1
+
+
+def run_fund_sync(args: argparse.Namespace) -> int:
+    """
+    Execute fund (ETF/LOF) data sync
+
+    Args:
+        args: Command line arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    from src.services.fund_sync_service import FundSyncService
+
+    logger.info("=" * 60)
+    logger.info("基金数据同步开始")
+    logger.info("=" * 60)
+
+    try:
+        sync_service = FundSyncService()
+
+        sync_etf = getattr(args, 'sync_etf', False)
+        sync_lof = getattr(args, 'sync_lof', False)
+        sync_funds = getattr(args, 'sync_funds', False)
+
+        if sync_funds or (sync_etf and sync_lof):
+            result = sync_service.sync_all_funds()
+            etf_result = result.get('etf', {})
+            lof_result = result.get('lof', {})
+            total_saved = result.get('total_saved', 0)
+
+            print("\n" + "=" * 60)
+            print("基金数据同步完成")
+            print("=" * 60)
+            print(f"ETF: 获取 {etf_result.get('total', 0)} 条, 保存 {etf_result.get('saved', 0)} 条")
+            print(f"LOF: 获取 {lof_result.get('total', 0)} 条, 保存 {lof_result.get('saved', 0)} 条")
+            print(f"总计保存: {total_saved} 条")
+            print("=" * 60)
+
+            if args.notify:
+                _send_fund_sync_notification(result)
+
+            return 0 if total_saved > 0 else 1
+
+        elif sync_etf:
+            result = sync_service.sync_etf_daily()
+            total = result.get('total', 0)
+            saved = result.get('saved', 0)
+
+            print("\n" + "=" * 60)
+            print("ETF 数据同步完成")
+            print("=" * 60)
+            print(f"获取: {total} 条")
+            print(f"保存: {saved} 条")
+            print("=" * 60)
+
+            if args.notify:
+                _send_fund_sync_notification({'etf': result, 'lof': {'saved': 0}, 'total_saved': saved})
+
+            return 0 if saved > 0 else 1
+
+        elif sync_lof:
+            result = sync_service.sync_lof_daily()
+            total = result.get('total', 0)
+            saved = result.get('saved', 0)
+
+            print("\n" + "=" * 60)
+            print("LOF 数据同步完成")
+            print("=" * 60)
+            print(f"获取: {total} 条")
+            print(f"保存: {saved} 条")
+            print("=" * 60)
+
+            if args.notify:
+                _send_fund_sync_notification({'etf': {'saved': 0}, 'lof': result, 'total_saved': saved})
+
+            return 0 if saved > 0 else 1
+
+        else:
+            logger.error("请指定同步类型: --sync-etf, --sync-lof 或 --sync-funds")
+            return 1
+
+    except Exception as e:
+        logger.exception(f"基金数据同步失败: {e}")
+        return 1
+
+
+def _send_fund_sync_notification(result: dict) -> None:
+    """Send fund sync notification to DingTalk"""
+    try:
+        from src.notification import NotificationService
+
+        notifier = NotificationService()
+        etf_result = result.get('etf', {})
+        lof_result = result.get('lof', {})
+        total_saved = result.get('total_saved', 0)
+
+        message = (
+            f"## 📊 基金数据同步报告\n\n"
+            f"### 同步统计\n\n"
+            f"| 类型 | 获取 | 保存 |\n"
+            f"| --- | --- | --- |\n"
+            f"| ETF | {etf_result.get('total', 0)} | {etf_result.get('saved', 0)} |\n"
+            f"| LOF | {lof_result.get('total', 0)} | {lof_result.get('saved', 0)} |\n\n"
+            f"**总计保存**: {total_saved} 条"
+        )
+
+        notifier.send(message)
+        logger.info("✅ 钉钉通知发送成功")
+    except Exception as e:
+        logger.error(f"❌ 钉钉通知发送失败: {e}")
 
 
 def run_full_analysis(
@@ -625,6 +757,14 @@ def main() -> int:
         if getattr(args, 'sync_daily', False):
             logger.info("模式: 日线数据同步")
             return run_daily_sync(args)
+
+        # 模式-0.5: 基金数据同步
+        sync_etf = getattr(args, 'sync_etf', False)
+        sync_lof = getattr(args, 'sync_lof', False)
+        sync_funds = getattr(args, 'sync_funds', False)
+        if sync_etf or sync_lof or sync_funds:
+            logger.info("模式: 基金数据同步")
+            return run_fund_sync(args)
 
         # 模式0: 回测
         if getattr(args, 'backtest', False):
