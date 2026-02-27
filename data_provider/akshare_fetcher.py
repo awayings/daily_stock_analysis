@@ -1257,6 +1257,140 @@ class AkshareFetcher(BaseFetcher):
             logger.error(f"[API错误] 获取LOF全量行情失败: {e}")
             return None
 
+    def get_etf_spot_data_sina(self) -> Optional[pd.DataFrame]:
+        """
+        Get all ETF spot data from Sina (backup source).
+
+        Data source: ak.fund_etf_category_sina(symbol="ETF基金")
+        Returns columns: 代码, 名称, 最新价, 涨跌额, 涨跌幅, 买入, 卖出, 昨收, 今开, 最高, 最低, 成交量, 成交额
+
+        Note: Sina interface does not return date field, we use current date.
+
+        Returns:
+            DataFrame with standardized columns for stock_daily table:
+            code, date, name, open, high, low, close, volume, amount, pct_chg, data_source
+        """
+        import akshare as ak
+
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            logger.info("[API调用] ak.fund_etf_category_sina(symbol='ETF基金') 获取ETF全量行情数据(新浪)...")
+            import time as _time
+            api_start = _time.time()
+
+            df = ak.fund_etf_category_sina(symbol="ETF基金")
+
+            api_elapsed = _time.time() - api_start
+
+            if df is None or df.empty:
+                logger.warning(f"[API返回] ak.fund_etf_category_sina(ETF) 返回空数据, 耗时 {api_elapsed:.2f}s")
+                return None
+
+            logger.info(f"[API返回] ak.fund_etf_category_sina(ETF) 成功: 返回 {len(df)} 只ETF, 耗时 {api_elapsed:.2f}s")
+            logger.debug(f"[API返回] 列名: {list(df.columns)}")
+
+            df = df.copy()
+
+            column_mapping = {
+                '代码': 'code',
+                '名称': 'name',
+                '今开': 'open',
+                '最高': 'high',
+                '最低': 'low',
+                '最新价': 'close',
+                '昨收': 'pre_close',
+                '涨跌幅': 'pct_chg',
+                '成交量': 'volume',
+                '成交额': 'amount',
+            }
+
+            existing_cols = [col for col in column_mapping.keys() if col in df.columns]
+            df = df.rename(columns={col: column_mapping[col] for col in existing_cols})
+
+            df['date'] = datetime.now().strftime('%Y-%m-%d')
+            df['data_source'] = 'akshare_etf_sina'
+
+            keep_cols = ['code', 'date', 'name', 'open', 'high', 'low', 'close',
+                         'volume', 'amount', 'pct_chg', 'data_source']
+            existing_keep = [col for col in keep_cols if col in df.columns]
+            df = df[existing_keep]
+
+            logger.info(f"[ETF行情-新浪] 标准化后数据: {len(df)} 条, 列: {list(df.columns)}")
+            return df
+
+        except Exception as e:
+            logger.error(f"[API错误] 获取ETF全量行情(新浪)失败: {e}")
+            return None
+
+    def get_lof_spot_data_sina(self) -> Optional[pd.DataFrame]:
+        """
+        Get all LOF (Listed Open-end Fund) spot data from Sina (backup source).
+
+        Data source: ak.fund_etf_category_sina(symbol="LOF基金")
+        Returns columns: 代码, 名称, 最新价, 涨跌额, 涨跌幅, 买入, 卖出, 昨收, 今开, 最高, 最低, 成交量, 成交额
+
+        Note: Sina interface does not return date field, we use current date.
+
+        Returns:
+            DataFrame with standardized columns for stock_daily table:
+            code, date, name, open, high, low, close, volume, amount, pct_chg, data_source
+        """
+        import akshare as ak
+
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            logger.info("[API调用] ak.fund_etf_category_sina(symbol='LOF基金') 获取LOF全量行情数据(新浪)...")
+            import time as _time
+            api_start = _time.time()
+
+            df = ak.fund_etf_category_sina(symbol="LOF基金")
+
+            api_elapsed = _time.time() - api_start
+
+            if df is None or df.empty:
+                logger.warning(f"[API返回] ak.fund_etf_category_sina(LOF) 返回空数据, 耗时 {api_elapsed:.2f}s")
+                return None
+
+            logger.info(f"[API返回] ak.fund_etf_category_sina(LOF) 成功: 返回 {len(df)} 只LOF, 耗时 {api_elapsed:.2f}s")
+            logger.debug(f"[API返回] 列名: {list(df.columns)}")
+
+            df = df.copy()
+
+            column_mapping = {
+                '代码': 'code',
+                '名称': 'name',
+                '今开': 'open',
+                '最高': 'high',
+                '最低': 'low',
+                '最新价': 'close',
+                '昨收': 'pre_close',
+                '涨跌幅': 'pct_chg',
+                '成交量': 'volume',
+                '成交额': 'amount',
+            }
+
+            existing_cols = [col for col in column_mapping.keys() if col in df.columns]
+            df = df.rename(columns={col: column_mapping[col] for col in existing_cols})
+
+            df['date'] = datetime.now().strftime('%Y-%m-%d')
+            df['data_source'] = 'akshare_lof_sina'
+
+            keep_cols = ['code', 'date', 'name', 'open', 'high', 'low', 'close',
+                         'volume', 'amount', 'pct_chg', 'data_source']
+            existing_keep = [col for col in keep_cols if col in df.columns]
+            df = df[existing_keep]
+
+            logger.info(f"[LOF行情-新浪] 标准化后数据: {len(df)} 条, 列: {list(df.columns)}")
+            return df
+
+        except Exception as e:
+            logger.error(f"[API错误] 获取LOF全量行情(新浪)失败: {e}")
+            return None
+
     def _get_hk_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
         """
         获取港股实时行情数据
