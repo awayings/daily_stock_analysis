@@ -45,8 +45,8 @@ class FundSyncService:
         Sync all ETF daily data to stock_daily table.
 
         Priority:
-        1. East Money (fund_etf_spot_em) - primary source
-        2. Sina (fund_etf_category_sina) - backup source
+        1. Sina (fund_etf_category_sina) - primary source
+        2. East Money (fund_etf_spot_em) - backup source
 
         Returns:
             Sync statistics:
@@ -73,22 +73,23 @@ class FundSyncService:
             df = None
             data_source = ""
 
-            df = fetcher.get_etf_spot_data()
+            # Priority: Sina first, then East Money
+            df = fetcher.get_etf_spot_data_sina()
 
             if df is not None and not df.empty:
-                data_source = "akshare_etf"
-                logger.info(f"[ETF同步] 东财接口获取成功: {len(df)} 条")
+                data_source = "akshare_etf_sina"
+                logger.info(f"[ETF同步] 新浪接口获取成功: {len(df)} 条")
             else:
-                logger.warning("[ETF同步] 东财接口未获取到数据，尝试新浪接口...")
-                df = fetcher.get_etf_spot_data_sina()
+                logger.warning("[ETF同步] 新浪接口未获取到数据，尝试东财接口...")
+                df = fetcher.get_etf_spot_data()
                 if df is not None and not df.empty:
-                    data_source = "akshare_etf_sina"
-                    logger.info(f"[ETF同步] 新浪接口获取成功: {len(df)} 条")
+                    data_source = "akshare_etf"
+                    logger.info(f"[ETF同步] 东财接口获取成功: {len(df)} 条")
                 else:
-                    logger.warning("[ETF同步] 新浪接口也未获取到数据")
+                    logger.warning("[ETF同步] 东财接口也未获取到数据")
 
             if df is None or df.empty:
-                result["errors"].append("东财和新浪接口均未获取到 ETF 数据")
+                result["errors"].append("新浪和东财接口均未获取到 ETF 数据")
                 return result
 
             result["total"] = len(df)
@@ -111,8 +112,8 @@ class FundSyncService:
         Sync all LOF daily data to stock_daily table.
 
         Priority:
-        1. East Money (fund_lof_spot_em) - primary source
-        2. Sina (fund_etf_category_sina) - backup source
+        1. Sina (fund_etf_category_sina) - primary source
+        2. East Money (fund_lof_spot_em) - backup source
 
         Returns:
             Sync statistics:
@@ -139,22 +140,23 @@ class FundSyncService:
             df = None
             data_source = ""
 
-            df = fetcher.get_lof_spot_data()
+            # Priority: Sina first, then East Money
+            df = fetcher.get_lof_spot_data_sina()
 
             if df is not None and not df.empty:
-                data_source = "akshare_lof"
-                logger.info(f"[LOF同步] 东财接口获取成功: {len(df)} 条")
+                data_source = "akshare_lof_sina"
+                logger.info(f"[LOF同步] 新浪接口获取成功: {len(df)} 条")
             else:
-                logger.warning("[LOF同步] 东财接口未获取到数据，尝试新浪接口...")
-                df = fetcher.get_lof_spot_data_sina()
+                logger.warning("[LOF同步] 新浪接口未获取到数据，尝试东财接口...")
+                df = fetcher.get_lof_spot_data()
                 if df is not None and not df.empty:
-                    data_source = "akshare_lof_sina"
-                    logger.info(f"[LOF同步] 新浪接口获取成功: {len(df)} 条")
+                    data_source = "akshare_lof"
+                    logger.info(f"[LOF同步] 东财接口获取成功: {len(df)} 条")
                 else:
-                    logger.warning("[LOF同步] 新浪接口也未获取到数据")
+                    logger.warning("[LOF同步] 东财接口也未获取到数据")
 
             if df is None or df.empty:
-                result["errors"].append("东财和新浪接口均未获取到 LOF 数据")
+                result["errors"].append("新浪和东财接口均未获取到 LOF 数据")
                 return result
 
             result["total"] = len(df)
