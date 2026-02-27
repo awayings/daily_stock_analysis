@@ -16,8 +16,10 @@ import time
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, timedelta
 from typing import List, Dict, Any, Optional, Tuple
+
+import pandas as pd
 
 from src.config import get_config, Config
 from src.storage import get_db
@@ -28,6 +30,7 @@ from src.notification import NotificationService, NotificationChannel
 from src.search_service import SearchService
 from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
+from src.core.trading_calendar import get_market_for_stock, is_market_open
 from bot.models import BotMessage
 
 
@@ -83,6 +86,7 @@ class StockAnalysisPipeline:
             tavily_keys=self.config.tavily_api_keys,
             brave_keys=self.config.brave_api_keys,
             serpapi_keys=self.config.serpapi_keys,
+            news_max_age_days=self.config.news_max_age_days,
         )
         
         logger.info(f"调度器初始化完成，最大并发数: {self.max_workers}")
@@ -206,21 +210,35 @@ class StockAnalysisPipeline:
             except Exception as e:
                 logger.warning(f"[{code}] 获取筹码分布失败: {e}")
             
+            # If agent mode is enabled, or specific agent skills are configured, use the Agent analysis pipeline
+            use_agent = getattr(self.config, 'agent_mode', False)
+            if not use_agent:
+                # Auto-enable agent mode when specific skills are configured (e.g., scheduled task with strategy)
+                configured_skills = getattr(self.config, 'agent_skills', [])
+                if configured_skills and configured_skills != ['all']:
+                    use_agent = True
+                    logger.info(f"[{code}] Auto-enabled agent mode due to configured skills: {configured_skills}")
+
+            if use_agent:
+                logger.info(f"[{code}] 启用 Agent 模式进行分析")
+                return self._analyze_with_agent(code, report_type, query_id, stock_name, realtime_quote, chip_data)
+            
             # Step 3: 趋势分析（基于交易理念）
             trend_result: Optional[TrendAnalysisResult] = None
             try:
-                # 获取历史数据进行趋势分析
-                context = self.db.get_analysis_context(code)
-                if context and 'raw_data' in context:
-                    import pandas as pd
-                    raw_data = context['raw_data']
-                    if isinstance(raw_data, list) and len(raw_data) > 0:
-                        df = pd.DataFrame(raw_data)
-                        trend_result = self.trend_analyzer.analyze(df, code)
-                        logger.info(f"[{code}] 趋势分析: {trend_result.trend_status.value}, "
-                                  f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
+                end_date = date.today()
+                start_date = end_date - timedelta(days=89)  # ~60 trading days for MA60
+                historical_bars = self.db.get_data_range(code, start_date, end_date)
+                if historical_bars:
+                    df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
+                    # Issue #234: Augment with realtime for intraday MA calculation
+                    if self.config.enable_realtime_quote and realtime_quote:
+                        df = self._augment_historical_with_realtime(df, realtime_quote, code)
+                    trend_result = self.trend_analyzer.analyze(df, code)
+                    logger.info(f"[{code}] 趋势分析: {trend_result.trend_status.value}, "
+                              f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
             except Exception as e:
-                logger.warning(f"[{code}] 趋势分析失败: {e}")
+                logger.warning(f"[{code}] 趋势分析失败: {e}", exc_info=True)
             
             # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
             news_context = None
@@ -266,7 +284,6 @@ class StockAnalysisPipeline:
             
             if context is None:
                 logger.warning(f"[{code}] 无法获取历史行情数据，将仅基于新闻和实时行情分析")
-                from datetime import date
                 context = {
                     'code': code,
                     'stock_name': stock_name,
@@ -399,8 +416,210 @@ class StockAnalysisPipeline:
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
             }
-        
+
+        # Issue #234: Override today with realtime OHLC + trend MA for intraday analysis
+        # Guard: trend_result.ma5 > 0 ensures MA calculation succeeded (data sufficient)
+        if realtime_quote and trend_result and trend_result.ma5 > 0:
+            price = getattr(realtime_quote, 'price', None)
+            if price is not None and price > 0:
+                yesterday_close = None
+                if enhanced.get('yesterday') and isinstance(enhanced['yesterday'], dict):
+                    yesterday_close = enhanced['yesterday'].get('close')
+                orig_today = enhanced.get('today') or {}
+                open_p = getattr(realtime_quote, 'open_price', None) or getattr(
+                    realtime_quote, 'pre_close', None
+                ) or yesterday_close or orig_today.get('open') or price
+                high_p = getattr(realtime_quote, 'high', None) or price
+                low_p = getattr(realtime_quote, 'low', None) or price
+                vol = getattr(realtime_quote, 'volume', None)
+                amt = getattr(realtime_quote, 'amount', None)
+                pct = getattr(realtime_quote, 'change_pct', None)
+                realtime_today = {
+                    'close': price,
+                    'open': open_p,
+                    'high': high_p,
+                    'low': low_p,
+                    'ma5': trend_result.ma5,
+                    'ma10': trend_result.ma10,
+                    'ma20': trend_result.ma20,
+                }
+                if vol is not None:
+                    realtime_today['volume'] = vol
+                if amt is not None:
+                    realtime_today['amount'] = amt
+                if pct is not None:
+                    realtime_today['pct_chg'] = pct
+                for k, v in orig_today.items():
+                    if k not in realtime_today and v is not None:
+                        realtime_today[k] = v
+                enhanced['today'] = realtime_today
+                enhanced['ma_status'] = self._compute_ma_status(
+                    price, trend_result.ma5, trend_result.ma10, trend_result.ma20
+                )
+                enhanced['date'] = date.today().isoformat()
+                if yesterday_close is not None:
+                    try:
+                        yc = float(yesterday_close)
+                        if yc > 0:
+                            enhanced['price_change_ratio'] = round(
+                                (price - yc) / yc * 100, 2
+                            )
+                    except (TypeError, ValueError):
+                        pass
+                if vol is not None and enhanced.get('yesterday'):
+                    yest_vol = enhanced['yesterday'].get('volume') if isinstance(
+                        enhanced['yesterday'], dict
+                    ) else None
+                    if yest_vol is not None:
+                        try:
+                            yv = float(yest_vol)
+                            if yv > 0:
+                                enhanced['volume_change_ratio'] = round(
+                                    float(vol) / yv, 2
+                                )
+                        except (TypeError, ValueError):
+                            pass
+
+        # ETF/index flag for analyzer prompt (Fixes #274)
+        enhanced['is_index_etf'] = SearchService.is_index_or_etf(
+            context.get('code', ''), enhanced.get('stock_name', stock_name)
+        )
+
         return enhanced
+
+    def _analyze_with_agent(
+        self, 
+        code: str, 
+        report_type: ReportType, 
+        query_id: str,
+        stock_name: str,
+        realtime_quote: Any,
+        chip_data: Optional[ChipDistribution]
+    ) -> Optional[AnalysisResult]:
+        """
+        使用 Agent 模式分析单只股票。
+        """
+        try:
+            from src.agent.factory import build_agent_executor
+
+            # Build executor from shared factory (ToolRegistry and SkillManager prototype are cached)
+            executor = build_agent_executor(self.config, getattr(self.config, 'agent_skills', None) or None)
+
+            # Build initial context to avoid redundant tool calls
+            initial_context = {
+                "stock_code": code,
+                "stock_name": stock_name,
+                "report_type": report_type.value,
+            }
+            
+            if realtime_quote:
+                initial_context["realtime_quote"] = self._safe_to_dict(realtime_quote)
+            if chip_data:
+                initial_context["chip_distribution"] = self._safe_to_dict(chip_data)
+
+            # 运行 Agent
+            message = f"请分析股票 {code} ({stock_name})，并生成决策仪表盘报告。"
+            agent_result = executor.run(message, context=initial_context)
+
+            # 转换为 AnalysisResult
+            result = self._agent_result_to_analysis_result(agent_result, code, stock_name, report_type, query_id)
+
+            # 保存新闻情报到数据库（Agent 工具结果仅用于 LLM 上下文，未持久化，Fixes #396）
+            # 使用 search_stock_news（与 Agent 工具调用逻辑一致），仅 1 次 API 调用，无额外延迟
+            if self.search_service.is_available:
+                try:
+                    news_response = self.search_service.search_stock_news(
+                        stock_code=code,
+                        stock_name=stock_name,
+                        max_results=5
+                    )
+                    if news_response.success and news_response.results:
+                        query_context = self._build_query_context(query_id=query_id)
+                        self.db.save_news_intel(
+                            code=code,
+                            name=stock_name,
+                            dimension="latest_news",
+                            query=news_response.query,
+                            response=news_response,
+                            query_context=query_context
+                        )
+                        logger.info(f"[{code}] Agent 模式: 新闻情报已保存 {len(news_response.results)} 条")
+                except Exception as e:
+                    logger.warning(f"[{code}] Agent 模式保存新闻情报失败: {e}")
+
+            # 保存分析历史记录
+            if result:
+                try:
+                    self.db.save_analysis_history(
+                        result=result,
+                        query_id=query_id,
+                        report_type=report_type.value,
+                        news_content=None,
+                        context_snapshot=initial_context,
+                        save_snapshot=self.save_context_snapshot
+                    )
+                except Exception as e:
+                    logger.warning(f"[{code}] 保存 Agent 分析历史失败: {e}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"[{code}] Agent 分析失败: {e}")
+            logger.exception(f"[{code}] Agent 详细错误信息:")
+            return None
+
+    def _agent_result_to_analysis_result(
+        self, agent_result, code: str, stock_name: str, report_type: ReportType, query_id: str
+    ) -> AnalysisResult:
+        """
+        将 AgentResult 转换为 AnalysisResult。
+        """
+        result = AnalysisResult(
+            code=code,
+            name=stock_name,
+            sentiment_score=50,
+            trend_prediction="未知",
+            operation_advice="观望",
+            success=agent_result.success,
+            error_message=agent_result.error if not agent_result.success else None,
+            data_sources=f"agent:{agent_result.provider}"
+        )
+
+        if agent_result.success and agent_result.dashboard:
+            dash = agent_result.dashboard
+            result.sentiment_score = self._safe_int(dash.get("sentiment_score"), 50)
+            result.trend_prediction = dash.get("trend_prediction", "未知")
+            result.operation_advice = dash.get("operation_advice", "观望")
+            result.decision_type = dash.get("decision_type", "hold")
+            result.analysis_summary = dash.get("analysis_summary", "")
+            # The AI returns a top-level dict that contains a nested 'dashboard' sub-key
+            # with core_conclusion / battle_plan / intelligence.  AnalysisResult's helper
+            # methods (get_sniper_points, get_core_conclusion, etc.) expect that inner
+            # structure, so we unwrap it here.
+            result.dashboard = dash.get("dashboard") or dash
+        else:
+            result.sentiment_score = 50
+            result.operation_advice = "观望"
+            if not result.error_message:
+                result.error_message = "Agent 未能生成有效的决策仪表盘"
+
+        return result
+
+    @staticmethod
+    def _safe_int(value: Any, default: int = 50) -> int:
+        """安全地将值转换为整数。"""
+        if value is None:
+            return default
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            import re
+            match = re.search(r'-?\d+', value)
+            if match:
+                return int(match.group())
+        return default
     
     def _describe_volume_ratio(self, volume_ratio: float) -> str:
         """
@@ -420,6 +639,101 @@ class StockAnalysisPipeline:
             return "明显放量"
         else:
             return "巨量"
+
+    @staticmethod
+    def _compute_ma_status(close: float, ma5: float, ma10: float, ma20: float) -> str:
+        """
+        Compute MA alignment status from price and MA values.
+        Logic mirrors storage._analyze_ma_status (Issue #234).
+        """
+        close = close or 0
+        ma5 = ma5 or 0
+        ma10 = ma10 or 0
+        ma20 = ma20 or 0
+        if close > ma5 > ma10 > ma20 > 0:
+            return "多头排列 📈"
+        elif close < ma5 < ma10 < ma20 and ma20 > 0:
+            return "空头排列 📉"
+        elif close > ma5 and ma5 > ma10:
+            return "短期向好 🔼"
+        elif close < ma5 and ma5 < ma10:
+            return "短期走弱 🔽"
+        else:
+            return "震荡整理 ↔️"
+
+    def _augment_historical_with_realtime(
+        self, df: pd.DataFrame, realtime_quote: Any, code: str
+    ) -> pd.DataFrame:
+        """
+        Augment historical OHLCV with today's realtime quote for intraday MA calculation.
+        Issue #234: Use realtime price instead of yesterday's close for technical indicators.
+        """
+        if df is None or df.empty or 'close' not in df.columns:
+            return df
+        if realtime_quote is None:
+            return df
+        price = getattr(realtime_quote, 'price', None)
+        if price is None or not (isinstance(price, (int, float)) and price > 0):
+            return df
+
+        # Optional: skip augmentation on non-trading days (fail-open)
+        enable_realtime_tech = getattr(
+            self.config, 'enable_realtime_technical_indicators', True
+        )
+        if not enable_realtime_tech:
+            return df
+        market = get_market_for_stock(code)
+        if market and not is_market_open(market, date.today()):
+            return df
+
+        last_val = df['date'].max()
+        last_date = (
+            last_val.date() if hasattr(last_val, 'date') else
+            (last_val if isinstance(last_val, date) else pd.Timestamp(last_val).date())
+        )
+        yesterday_close = float(df.iloc[-1]['close']) if len(df) > 0 else price
+        open_p = getattr(realtime_quote, 'open_price', None) or getattr(
+            realtime_quote, 'pre_close', None
+        ) or yesterday_close
+        high_p = getattr(realtime_quote, 'high', None) or price
+        low_p = getattr(realtime_quote, 'low', None) or price
+        vol = getattr(realtime_quote, 'volume', None) or 0
+        amt = getattr(realtime_quote, 'amount', None)
+        pct = getattr(realtime_quote, 'change_pct', None)
+
+        if last_date >= date.today():
+            # Update last row with realtime close (copy to avoid mutating caller's df)
+            df = df.copy()
+            idx = df.index[-1]
+            df.loc[idx, 'close'] = price
+            if open_p is not None:
+                df.loc[idx, 'open'] = open_p
+            if high_p is not None:
+                df.loc[idx, 'high'] = high_p
+            if low_p is not None:
+                df.loc[idx, 'low'] = low_p
+            if vol:
+                df.loc[idx, 'volume'] = vol
+            if amt is not None:
+                df.loc[idx, 'amount'] = amt
+            if pct is not None:
+                df.loc[idx, 'pct_chg'] = pct
+        else:
+            # Append virtual today row
+            new_row = {
+                'code': code,
+                'date': date.today(),
+                'open': open_p,
+                'high': high_p,
+                'low': low_p,
+                'close': price,
+                'volume': vol,
+                'amount': amt if amt is not None else 0,
+                'pct_chg': pct if pct is not None else 0,
+            }
+            new_df = pd.DataFrame([new_row])
+            df = pd.concat([df, new_df], ignore_index=True)
+        return df
 
     def _build_context_snapshot(
         self,
@@ -585,25 +899,27 @@ class StockAnalysisPipeline:
             return None
     
     def run(
-        self, 
+        self,
         stock_codes: Optional[List[str]] = None,
         dry_run: bool = False,
-        send_notification: bool = True
+        send_notification: bool = True,
+        merge_notification: bool = False
     ) -> List[AnalysisResult]:
         """
         运行完整的分析流程
-        
+
         流程：
         1. 获取待分析的股票列表
         2. 使用线程池并发处理
         3. 收集分析结果
         4. 发送通知
-        
+
         Args:
             stock_codes: 股票代码列表（可选，默认使用配置中的自选股）
             dry_run: 是否仅获取数据不分析
             send_notification: 是否发送推送通知
-            
+            merge_notification: 是否合并推送（跳过本次推送，由 main 层合并个股+大盘后统一发送，Issue #190）
+
         Returns:
             分析结果列表
         """
@@ -694,6 +1010,10 @@ class StockAnalysisPipeline:
             if single_stock_notify:
                 # 单股推送模式：只保存汇总报告，不再重复推送
                 logger.info("单股推送模式：跳过汇总推送，仅保存报告到本地")
+                self._send_notifications(results, skip_push=True)
+            elif merge_notification:
+                # 合并模式（Issue #190）：仅保存，不推送，由 main 层合并个股+大盘后统一发送
+                logger.info("合并推送模式：跳过本次推送，将在个股+大盘复盘后统一发送")
                 self._send_notifications(results, skip_push=True)
             else:
                 self._send_notifications(results)

@@ -42,8 +42,9 @@ import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
+from data_provider.base import canonical_stock_code
 from src.core.pipeline import StockAnalysisPipeline
 from src.core.market_review import run_market_review
 
@@ -116,6 +117,12 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        '--no-run-immediately',
+        action='store_true',
+        help='定时任务启动时不立即执行一次'
+    )
+
+    parser.add_argument(
         '--market-review',
         action='store_true',
         help='仅运行大盘复盘分析'
@@ -125,6 +132,12 @@ def parse_arguments() -> argparse.Namespace:
         '--no-market-review',
         action='store_true',
         help='跳过大盘复盘分析'
+    )
+
+    parser.add_argument(
+        '--force-run',
+        action='store_true',
+        help='跳过交易日检查，强制执行全量分析（Issue #373）'
     )
 
     parser.add_argument(
@@ -201,6 +214,48 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _compute_trading_day_filter(
+    config: Config,
+    args: argparse.Namespace,
+    stock_codes: List[str],
+) -> Tuple[List[str], Optional[str], bool]:
+    """
+    Compute filtered stock list and effective market review region (Issue #373).
+
+    Returns:
+        (filtered_codes, effective_region, should_skip_all)
+        - effective_region None = use config default (check disabled)
+        - effective_region '' = all relevant markets closed, skip market review
+        - should_skip_all: skip entire run when no stocks and no market review to run
+    """
+    force_run = getattr(args, 'force_run', False)
+    if force_run or not getattr(config, 'trading_day_check_enabled', True):
+        return (stock_codes, None, False)
+
+    from src.core.trading_calendar import (
+        get_market_for_stock,
+        get_open_markets_today,
+        compute_effective_region,
+    )
+
+    open_markets = get_open_markets_today()
+    filtered_codes = []
+    for code in stock_codes:
+        mkt = get_market_for_stock(code)
+        if mkt in open_markets or mkt is None:
+            filtered_codes.append(code)
+
+    if config.market_review_enabled and not getattr(args, 'no_market_review', False):
+        effective_region = compute_effective_region(
+            getattr(config, 'market_review_region', 'cn') or 'cn', open_markets
+        )
+    else:
+        effective_region = None
+
+    should_skip_all = (not filtered_codes) and (effective_region or '') == ''
+    return (filtered_codes, effective_region, should_skip_all)
+
+
 def run_full_analysis(
     config: Config,
     args: argparse.Namespace,
@@ -212,9 +267,32 @@ def run_full_analysis(
     这是定时任务调用的主函数
     """
     try:
+        # Issue #373: Trading day filter (per-stock, per-market)
+        effective_codes = stock_codes if stock_codes is not None else config.stock_list
+        filtered_codes, effective_region, should_skip = _compute_trading_day_filter(
+            config, args, effective_codes
+        )
+        if should_skip:
+            logger.info(
+                "今日所有相关市场均为非交易日，跳过执行。可使用 --force-run 强制执行。"
+            )
+            return
+        if set(filtered_codes) != set(effective_codes):
+            skipped = set(effective_codes) - set(filtered_codes)
+            logger.info("今日休市股票已跳过: %s", skipped)
+        stock_codes = filtered_codes
+
         # 命令行参数 --single-notify 覆盖配置（#55）
         if getattr(args, 'single_notify', False):
             config.single_stock_notify = True
+
+        # Issue #190: 个股与大盘复盘合并推送
+        merge_notification = (
+            getattr(config, 'merge_email_notification', False)
+            and config.market_review_enabled
+            and not getattr(args, 'no_market_review', False)
+            and not config.single_stock_notify
+        )
 
         # 创建调度器
         save_context_snapshot = None
@@ -233,28 +311,55 @@ def run_full_analysis(
         results = pipeline.run(
             stock_codes=stock_codes,
             dry_run=args.dry_run,
-            send_notification=not args.no_notify
+            send_notification=not args.no_notify,
+            merge_notification=merge_notification
         )
 
         # Issue #128: 分析间隔 - 在个股分析和大盘分析之间添加延迟
         analysis_delay = getattr(config, 'analysis_delay', 0)
-        if analysis_delay > 0 and config.market_review_enabled and not args.no_market_review:
+        if (
+            analysis_delay > 0
+            and config.market_review_enabled
+            and not args.no_market_review
+            and effective_region != ''
+        ):
             logger.info(f"等待 {analysis_delay} 秒后执行大盘复盘（避免API限流）...")
             time.sleep(analysis_delay)
 
         # 2. 运行大盘复盘（如果启用且不是仅个股模式）
         market_report = ""
-        if config.market_review_enabled and not args.no_market_review:
-            # 只调用一次，并获取结果
+        if (
+            config.market_review_enabled
+            and not args.no_market_review
+            and effective_region != ''
+        ):
             review_result = run_market_review(
                 notifier=pipeline.notifier,
                 analyzer=pipeline.analyzer,
                 search_service=pipeline.search_service,
-                send_notification=not args.no_notify
+                send_notification=not args.no_notify,
+                merge_notification=merge_notification,
+                override_region=effective_region,
             )
             # 如果有结果，赋值给 market_report 用于后续飞书文档生成
             if review_result:
                 market_report = review_result
+
+        # Issue #190: 合并推送（个股+大盘复盘）
+        if merge_notification and (results or market_report) and not args.no_notify:
+            parts = []
+            if market_report:
+                parts.append(f"# 📈 大盘复盘\n\n{market_report}")
+            if results:
+                dashboard_content = pipeline.notifier.generate_dashboard_report(results)
+                parts.append(f"# 🚀 个股决策仪表盘\n\n{dashboard_content}")
+            if parts:
+                combined_content = "\n\n---\n\n".join(parts)
+                if pipeline.notifier.is_available():
+                    if pipeline.notifier.send(combined_content, email_send_to_all=True):
+                        logger.info("已合并推送（个股+大盘复盘）")
+                    else:
+                        logger.warning("合并推送失败")
 
         # 输出摘要
         if results:
@@ -414,10 +519,10 @@ def main() -> int:
     for warning in warnings:
         logger.warning(warning)
 
-    # 解析股票列表
+    # 解析股票列表（统一为大写 Issue #355）
     stock_codes = None
     if args.stocks:
-        stock_codes = [code.strip() for code in args.stocks.split(',') if code.strip()]
+        stock_codes = [canonical_stock_code(c) for c in args.stocks.split(',') if (c or "").strip()]
         logger.info(f"使用命令行指定的股票列表: {stock_codes}")
 
     # === 处理 --webui / --webui-only 参数，映射到 --serve / --serve-only ===
@@ -490,6 +595,21 @@ def main() -> int:
             from src.notification import NotificationService
             from src.search_service import SearchService
 
+            # Issue #373: Trading day check for market-review-only mode.
+            # Do NOT use _compute_trading_day_filter here: that helper checks
+            # config.market_review_enabled, which would wrongly block an
+            # explicit --market-review invocation when the flag is disabled.
+            effective_region = None
+            if not getattr(args, 'force_run', False) and getattr(config, 'trading_day_check_enabled', True):
+                from src.core.trading_calendar import get_open_markets_today, compute_effective_region as _compute_region
+                open_markets = get_open_markets_today()
+                effective_region = _compute_region(
+                    getattr(config, 'market_review_region', 'cn') or 'cn', open_markets
+                )
+                if effective_region == '':
+                    logger.info("今日大盘复盘相关市场均为非交易日，跳过执行。可使用 --force-run 强制执行。")
+                    return 0
+
             logger.info("模式: 仅大盘复盘")
             notifier = NotificationService()
 
@@ -502,7 +622,8 @@ def main() -> int:
                     bocha_keys=config.bocha_api_keys,
                     tavily_keys=config.tavily_api_keys,
                     brave_keys=config.brave_api_keys,
-                    serpapi_keys=config.serpapi_keys
+                    serpapi_keys=config.serpapi_keys,
+                    news_max_age_days=config.news_max_age_days,
                 )
 
             if config.gemini_api_key or config.openai_api_key:
@@ -517,7 +638,8 @@ def main() -> int:
                 notifier=notifier,
                 analyzer=analyzer,
                 search_service=search_service,
-                send_notification=not args.no_notify
+                send_notification=not args.no_notify,
+                override_region=effective_region,
             )
             return 0
 
@@ -525,6 +647,15 @@ def main() -> int:
         if args.schedule or config.schedule_enabled:
             logger.info("模式: 定时任务")
             logger.info(f"每日执行时间: {config.schedule_time}")
+
+            # Determine whether to run immediately:
+            # Command line arg --no-run-immediately overrides config if present.
+            # Otherwise use config (defaults to True).
+            should_run_immediately = config.schedule_run_immediately
+            if getattr(args, 'no_run_immediately', False):
+                should_run_immediately = False
+            
+            logger.info(f"启动时立即执行: {should_run_immediately}")
 
             from src.scheduler import run_with_schedule
 
@@ -534,12 +665,15 @@ def main() -> int:
             run_with_schedule(
                 task=scheduled_task,
                 schedule_time=config.schedule_time,
-                run_immediately=True  # 启动时先执行一次
+                run_immediately=should_run_immediately
             )
             return 0
 
         # 模式3: 正常单次运行
-        run_full_analysis(config, args, stock_codes)
+        if config.run_immediately:
+            run_full_analysis(config, args, stock_codes)
+        else:
+            logger.info("配置为不立即运行分析 (RUN_IMMEDIATELY=false)")
 
         logger.info("\n程序执行完成")
 
