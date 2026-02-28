@@ -114,49 +114,77 @@ class DailyStockSyncService:
     
     def _try_tushare_batch_sync(self, sync_date: date) -> Optional[Dict[str, Any]]:
         """
-        使用 Tushare 批量接口同步
-        
-        一次请求获取全市场数据，最高效
-        
+        Use Tushare batch interfaces to sync all data types.
+
+        Calls three separate batch APIs:
+        1. daily(trade_date) - A股 stocks
+        2. fund_daily(trade_date) - ETF/LOF funds
+        3. hk_daily(trade_date) - HK stocks
+
         Args:
-            sync_date: 同步日期
-            
+            sync_date: Sync date
+
         Returns:
-            同步结果，失败返回 None
+            Sync result dict, or None if all APIs fail
         """
         try:
             from data_provider.tushare_fetcher import TushareFetcher
-            
+            import pandas as pd
+
             fetcher = TushareFetcher()
-            
+
             if fetcher._api is None:
-                logger.info("[批量同步] Tushare 未配置 Token，跳过")
+                logger.info("[Batch Sync] Tushare Token not configured, skipping")
                 return None
-            
-            logger.info("[批量同步] 尝试使用 Tushare 批量接口...")
-            
+
+            logger.info("[Batch Sync] Using Tushare batch interfaces...")
+
             trade_date = sync_date.strftime('%Y-%m-%d')
-            df = fetcher.get_daily_data_by_date(trade_date)
-            
-            if df is None or df.empty:
-                logger.warning("[批量同步] Tushare 批量获取数据为空")
+            all_dfs = []
+            data_types_synced = []
+            errors = []
+
+            df_a = fetcher.get_daily_data_by_date(trade_date)
+            if df_a is not None and not df_a.empty:
+                all_dfs.append(df_a)
+                data_types_synced.append(f"A股({len(df_a)})")
+                logger.info(f"[Batch Sync] A股: {len(df_a)} records")
+
+            df_fund = fetcher.get_fund_daily_data_by_date(trade_date)
+            if df_fund is not None and not df_fund.empty:
+                all_dfs.append(df_fund)
+                data_types_synced.append(f"基金({len(df_fund)})")
+                logger.info(f"[Batch Sync] 基金: {len(df_fund)} records")
+
+            df_hk = fetcher.get_hk_daily_data_by_date(trade_date)
+            if df_hk is not None and not df_hk.empty:
+                all_dfs.append(df_hk)
+                data_types_synced.append(f"港股({len(df_hk)})")
+                logger.info(f"[Batch Sync] 港股: {len(df_hk)} records")
+
+            if not all_dfs:
+                logger.warning("[Batch Sync] Tushare batch sync returned no data from any API")
                 return None
-            
-            saved_count = self._save_batch_data(df, "TushareFetcher")
-            
-            logger.info(f"[批量同步] Tushare 批量同步完成: 获取 {len(df)} 条，保存 {saved_count} 条")
-            
+
+            combined_df = pd.concat(all_dfs, ignore_index=True)
+            logger.info(f"[Batch Sync] Combined total: {len(combined_df)} records from {len(all_dfs)} APIs")
+
+            saved_count = self._save_batch_data(combined_df, "TushareFetcher")
+
+            logger.info(f"[Batch Sync] Tushare batch sync complete: fetched {len(combined_df)}, saved {saved_count} records")
+            logger.info(f"[Batch Sync] Data types synced: {', '.join(data_types_synced)}")
+
             return {
-                "total": len(df),
+                "total": len(combined_df),
                 "success": saved_count,
                 "failed": 0,
                 "data_sources": "TushareFetcher",
-                "errors": [],
+                "errors": errors,
                 "sync_mode": "tushare_batch"
             }
-            
+
         except Exception as e:
-            logger.warning(f"[批量同步] Tushare 批量同步失败: {e}")
+            logger.warning(f"[Batch Sync] Tushare batch sync failed: {e}")
             return None
     
     def _try_efinance_batch_sync(self, sync_date: date) -> Optional[Dict[str, Any]]:
