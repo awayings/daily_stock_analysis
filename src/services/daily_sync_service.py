@@ -12,13 +12,33 @@
 """
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, time
 from typing import Optional, Dict, Any, List, Tuple
 
 from src.repositories.stock_repo import StockRepository
 from src.storage import DatabaseManager
 
 logger = logging.getLogger(__name__)
+
+
+def get_default_sync_date() -> date:
+    """
+    Calculate default sync date based on current time.
+
+    Rules:
+    - Before 17:00 (5 PM): Use previous day
+    - At or after 17:00 (5 PM): Use current day
+
+    Returns:
+        date: Default sync date
+    """
+    now = datetime.now()
+    cutoff_time = time(17, 0, 0)
+
+    if now.time() < cutoff_time:
+        return (now - timedelta(days=1)).date()
+    else:
+        return now.date()
 
 
 class DailyStockSyncService:
@@ -62,7 +82,7 @@ class DailyStockSyncService:
         3. 降级到逐只同步
         
         Args:
-            sync_date: 同步日期（可选，默认今天）
+            sync_date: 同步日期（可选，默认根据时间自动选择：17:00前为前一天，17:00后为当天）
             use_batch: 是否使用批量接口（默认 True）
             
         Returns:
@@ -77,7 +97,7 @@ class DailyStockSyncService:
             }
         """
         if sync_date is None:
-            sync_date = date.today()
+            sync_date = get_default_sync_date()
         
         logger.info(f"开始同步日线数据，目标日期: {sync_date}")
         
@@ -150,17 +170,17 @@ class DailyStockSyncService:
                 data_types_synced.append(f"A股({len(df_a)})")
                 logger.info(f"[Batch Sync] A股: {len(df_a)} records")
 
-            df_fund = fetcher.get_fund_daily_data_by_date(trade_date)
-            if df_fund is not None and not df_fund.empty:
-                all_dfs.append(df_fund)
-                data_types_synced.append(f"基金({len(df_fund)})")
-                logger.info(f"[Batch Sync] 基金: {len(df_fund)} records")
+            # df_fund = fetcher.get_fund_daily_data_by_date(trade_date)
+            # if df_fund is not None and not df_fund.empty:
+            #     all_dfs.append(df_fund)
+            #     data_types_synced.append(f"基金({len(df_fund)})")
+            #     logger.info(f"[Batch Sync] 基金: {len(df_fund)} records")
 
-            df_hk = fetcher.get_hk_daily_data_by_date(trade_date)
-            if df_hk is not None and not df_hk.empty:
-                all_dfs.append(df_hk)
-                data_types_synced.append(f"港股({len(df_hk)})")
-                logger.info(f"[Batch Sync] 港股: {len(df_hk)} records")
+            # df_hk = fetcher.get_hk_daily_data_by_date(trade_date)
+            # if df_hk is not None and not df_hk.empty:
+            #     all_dfs.append(df_hk)
+            #     data_types_synced.append(f"港股({len(df_hk)})")
+            #     logger.info(f"[Batch Sync] 港股: {len(df_hk)} records")
 
             if not all_dfs:
                 logger.warning("[Batch Sync] Tushare batch sync returned no data from any API")
@@ -267,33 +287,57 @@ class DailyStockSyncService:
     
     def _save_batch_data(self, df, data_source: str) -> int:
         """
-        保存批量获取的数据
-        
+        Save batch-fetched data with optimized name lookup.
+
+        Optimization strategy:
+        1. Check database for existing names first
+        2. Only fetch names for codes not found in database
+        3. This reduces API calls significantly for A股 and ETF/LOF data
+
         Args:
-            df: 包含多只股票数据的 DataFrame
-            data_source: 数据源名称
-            
+            df: DataFrame containing multiple stocks' data
+            data_source: Data source name
+
         Returns:
-            成功保存的股票数量
+            Number of stocks saved
         """
         import pandas as pd
         from data_provider.base import DataFetcherManager
-        
+
         if df is None or df.empty:
             return 0
-        
-        stock_codes = df['code'].unique().tolist()
-        logger.info(f"[批量保存] 批量获取 {len(stock_codes)} 只股票名称...")
-        manager = DataFetcherManager()
-        stock_names = manager.batch_get_stock_names(stock_codes)
-        
+
         df_with_names = df.copy()
-        df_with_names['name'] = df_with_names['code'].map(stock_names)
-        
-        logger.info(f"[批量保存] 开始批量保存 {len(df)} 条记录...")
+
+        if 'name' not in df_with_names.columns:
+            df_with_names['name'] = None
+
+        stock_codes = df_with_names['code'].unique().tolist()
+
+        logger.info(f"[Batch Save] Checking database for existing names for {len(stock_codes)} codes...")
+        existing_names = self.repo.get_existing_names(stock_codes)
+        logger.info(f"[Batch Save] Found {len(existing_names)} names in database")
+
+        codes_without_names = [code for code in stock_codes if code not in existing_names]
+
+        if codes_without_names:
+            logger.info(f"[Batch Save] Fetching names for {len(codes_without_names)} codes from data providers...")
+            manager = DataFetcherManager()
+            fetched_names = manager.batch_get_stock_names(codes_without_names)
+
+            for code, name in fetched_names.items():
+                if name:
+                    df_with_names.loc[df_with_names['code'] == code, 'name'] = name
+                    existing_names[code] = name
+        else:
+            logger.info(f"[Batch Save] All codes have names in database, skipping API calls")
+
+        df_with_names['name'] = df_with_names['code'].map(existing_names).fillna(df_with_names['name'])
+
+        logger.info(f"[Batch Save] Saving {len(df_with_names)} records...")
         saved_count = self.db.save_daily_data_batch(df_with_names, data_source)
-        
-        logger.info(f"[批量保存] 保存完成: {saved_count} 条记录，涉及 {len(stock_codes)} 只股票")
+
+        logger.info(f"[Batch Save] Saved {saved_count} records for {len(stock_codes)} stocks")
         return len(stock_codes)
     
     def _sync_stocks_one_by_one(self, sync_date: date) -> Dict[str, Any]:

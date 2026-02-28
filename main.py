@@ -54,6 +54,29 @@ from src.logging_config import setup_logging
 logger = logging.getLogger(__name__)
 
 
+def get_default_sync_date():
+    """
+    Calculate default sync date based on current time.
+
+    Rules:
+    - Before 17:00 (5 PM): Use previous day
+    - At or after 17:00 (5 PM): Use current day
+
+    Returns:
+        date: Default sync date
+    """
+    from datetime import date as date_type
+    from datetime import time as time_type
+
+    now = datetime.now()
+    cutoff_time = time_type(17, 0, 0)
+
+    if now.time() < cutoff_time:
+        return (now - timedelta(days=1)).date()
+    else:
+        return now.date()
+
+
 def parse_arguments() -> argparse.Namespace:
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
@@ -218,7 +241,7 @@ def parse_arguments() -> argparse.Namespace:
         '--date',
         type=str,
         default=None,
-        help='指定同步日期（YYYY-MM-DD 格式，默认今天）'
+        help='指定同步日期（YYYY-MM-DD 格式，默认根据时间自动选择：17:00前为前一天，17:00后为当天）'
     )
 
     parser.add_argument(
@@ -289,7 +312,7 @@ def run_daily_sync(args: argparse.Namespace) -> int:
             logger.error(f"日期格式错误: {args.date}，请使用 YYYY-MM-DD 格式")
             return 1
     else:
-        sync_date = date_type.today()
+        sync_date = get_default_sync_date()
     
     logger.info("=" * 60)
     logger.info(f"日线数据同步开始 - 目标日期: {sync_date}")
@@ -531,7 +554,7 @@ def run_hk_sync(args: argparse.Namespace) -> int:
             logger.error(f"日期格式错误: {args.date}，请使用 YYYY-MM-DD 格式")
             return 1
     else:
-        sync_date = date_type.today()
+        sync_date = get_default_sync_date()
 
     logger.info("=" * 60)
     logger.info(f"港股日线数据同步开始 - 目标日期: {sync_date}")

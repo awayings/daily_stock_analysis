@@ -348,13 +348,13 @@ class StockRepository:
 
     def _get_stock_names(self, codes: List[str]) -> Dict[str, str]:
         """
-        批量获取股票名称
-        
+        Batch fetch stock names from data providers.
+
         Args:
-            codes: 股票代码列表
-            
+            codes: Stock code list
+
         Returns:
-            {股票代码: 股票名称} 字典
+            {stock_code: stock_name} dict
         """
         try:
             from data_provider.base import DataFetcherManager
@@ -362,4 +362,33 @@ class StockRepository:
             return manager.batch_get_stock_names(codes)
         except Exception as e:
             logger.warning(f"获取股票名称失败: {e}")
+            return {}
+
+    def get_existing_names(self, codes: List[str]) -> Dict[str, str]:
+        """
+        Get existing stock names from database for given codes.
+
+        Args:
+            codes: Stock code list
+
+        Returns:
+            {stock_code: stock_name} dict for codes that have names in DB
+        """
+        try:
+            with self.db.get_session() as session:
+                results = session.execute(
+                    select(StockDaily.code, StockDaily.name)
+                    .where(
+                        and_(
+                            StockDaily.code.in_(codes),
+                            StockDaily.name.isnot(None),
+                            StockDaily.name != ''
+                        )
+                    )
+                    .distinct()
+                ).fetchall()
+
+                return {code: name for code, name in results if name}
+        except Exception as e:
+            logger.error(f"获取数据库中已有名称失败: {e}")
             return {}
